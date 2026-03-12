@@ -213,7 +213,11 @@ void setup() {
   delay(1000);
   WiFi.mode(WIFI_STA);
 
-  LOG("Node D | actual MAC: %s", WiFi.macAddress().c_str());
+  uint8_t actualMac[6];
+  esp_read_mac(actualMac, ESP_MAC_WIFI_STA);
+  char actualStr[18];
+  macToStr(actualMac, actualStr);
+  LOG("Node D | actual MAC: %s", actualStr);
   char expectedStr[18];
   macToStr(myMac, expectedStr);
   LOG("Node D | hardcoded myMac: %s", expectedStr);

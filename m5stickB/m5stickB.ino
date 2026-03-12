@@ -59,6 +59,8 @@ void onDataReceived(const esp_now_recv_info *recvInfo, const uint8_t *data, int 
   if (pkt.type == PACKET_GO && isLocalMac(pkt.dest_mac, myMac)) {
     startTime = millis();
     gameStarted = true;
+    lastButtonState = false;
+    lastDebounceTime = 0;
     LOG("GO accepted | timer started at %lu ms | forwarding to C", startTime);
 
     GamePacket relayPkt = pkt;
@@ -79,6 +81,7 @@ void onDataReceived(const esp_now_recv_info *recvInfo, const uint8_t *data, int 
   if (pkt.type == PACKET_RESULT) {
     if (isLocalMac(pkt.dest_mac, myMac)) {
       gameStarted = false;
+      lastButtonState = false;
       LOG("RESULT received | round complete, resetting");
       M5.Lcd.fillScreen(BLACK);
       M5.Lcd.setCursor(10, 20);
@@ -124,7 +127,11 @@ void setup() {
   delay(1000);
   WiFi.mode(WIFI_STA);
 
-  LOG("Node B | actual MAC: %s", WiFi.macAddress().c_str());
+  uint8_t actualMac[6];
+  esp_read_mac(actualMac, ESP_MAC_WIFI_STA);
+  char actualStr[18];
+  macToStr(actualMac, actualStr);
+  LOG("Node B | actual MAC: %s", actualStr);
   char expectedStr[18];
   macToStr(myMac, expectedStr);
   LOG("Node B | hardcoded myMac: %s", expectedStr);

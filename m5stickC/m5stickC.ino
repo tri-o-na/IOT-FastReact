@@ -20,7 +20,7 @@ uint8_t dedupIndex = 0;
 void registerPeer(uint8_t* mac) {
   esp_now_peer_info_t peer = {};
   memcpy(peer.peer_addr, mac, 6);
-  peer.channel = 0;
+  peer.channel = ESPNOW_CHANNEL;
   peer.encrypt = false;
   esp_now_add_peer(&peer);
 }
@@ -66,7 +66,9 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
   WiFi.mode(WIFI_STA);
+  configureEspNowChannel();
   Serial.println("Node C ready");
+  Serial.printf("ESP-NOW channel locked to %d\n", ESPNOW_CHANNEL);
 
   esp_now_init();
   esp_now_register_recv_cb(onDataReceived);

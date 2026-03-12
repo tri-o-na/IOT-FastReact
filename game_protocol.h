@@ -2,6 +2,7 @@
 #define GAME_PROTOCOL_H
 
 #include <Arduino.h>
+#include <esp_wifi.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -16,6 +17,7 @@ enum PacketType : uint8_t {
 };
 
 #define DEDUP_CACHE_SIZE 8
+#define ESPNOW_CHANNEL 1
 struct GamePacket {
   uint8_t type;
   uint8_t origin_mac[6];
@@ -104,6 +106,19 @@ inline bool isDuplicateAndRemember(DedupEntry cache[DEDUP_CACHE_SIZE],
   copyMac(slot.origin_mac, origin_mac);
   next_index = (next_index + 1) % DEDUP_CACHE_SIZE;
   return false;
+}
+
+inline bool configureEspNowChannel() {
+  if (esp_wifi_set_promiscuous(true) != ESP_OK) {
+    return false;
+  }
+
+  if (esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE) != ESP_OK) {
+    esp_wifi_set_promiscuous(false);
+    return false;
+  }
+
+  return esp_wifi_set_promiscuous(false) == ESP_OK;
 }
 
 #endif

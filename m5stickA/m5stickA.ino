@@ -30,6 +30,13 @@ void registerPeer(uint8_t* mac) {
   }
 }
 
+void sendPacket(const uint8_t* mac, GamePacket &pkt, const char* label) {
+  esp_err_t err = esp_now_send(mac, (uint8_t*)&pkt, sizeof(pkt));
+  if (err != ESP_OK) {
+    LOG("ERROR: %s failed immediately (err=%d)", label, err);
+  }
+}
+
 void onDataReceived(const esp_now_recv_info *recvInfo, const uint8_t *data, int len) {
   char srcStr[18];
   macToStr(recvInfo->src_addr, srcStr);
@@ -145,7 +152,7 @@ void loop() {
 
     LOG("PRESS sending to D | reaction_ms=%lu hop=%d id=%u",
         (unsigned long)pkt.reaction_ms, pkt.hop_count, pkt.packet_id);
-    esp_now_send(macD, (uint8_t*)&pkt, sizeof(pkt));
+    sendPacket(macD, pkt, "PRESS to D");
 
     M5.Lcd.fillScreen(BLACK);
     M5.Lcd.setCursor(10, 30);

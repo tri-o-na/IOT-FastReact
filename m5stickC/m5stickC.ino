@@ -3,9 +3,7 @@
 #include <WiFi.h>
 #include "../game_protocol.h"
 
-// C only knows B — out of range of D
 uint8_t myMac[6];
-uint8_t macB[] = {0x4C, 0x75, 0x25, 0xCB, 0x89, 0x98};
 uint8_t macD[] = {0xD4, 0xD4, 0xDA, 0x85, 0x4D, 0x98};
 
 bool lastButtonState = false;
@@ -29,6 +27,13 @@ void registerPeer(uint8_t* mac) {
     LOG("Registered peer %s on ch%d", macStr, ESPNOW_CHANNEL);
   } else {
     LOG("ERROR: Failed to register peer %s (err=%d)", macStr, res);
+  }
+}
+
+void sendPacket(const uint8_t* mac, GamePacket &pkt, const char* label) {
+  esp_err_t err = esp_now_send(mac, (uint8_t*)&pkt, sizeof(pkt));
+  if (err != ESP_OK) {
+    LOG("ERROR: %s failed immediately (err=%d)", label, err);
   }
 }
 
@@ -65,7 +70,7 @@ void onDataReceived(const esp_now_recv_info *recvInfo, const uint8_t *data, int 
     gameStarted = true;
     lastButtonState = false;
     lastDebounceTime = 0;
-    LOG("GO accepted via relay | timer started at %lu ms", startTime);
+    LOG("GO accepted | timer started at %lu ms", startTime);
     M5.Lcd.fillScreen(BLACK);
     M5.Lcd.setCursor(10, 30);
     M5.Lcd.setTextSize(3);
@@ -117,11 +122,11 @@ void setup() {
 
   esp_now_register_recv_cb(onDataReceived);
 
-  registerPeer(macB);
+  registerPeer(macD);
   resetDedupCache(dedupCache);
 
   M5.Lcd.setTextSize(2);
-  M5.Lcd.println("Node C\nOut of range\nWaiting GO...");
+  M5.Lcd.println("Node C\nWaiting\nfor GO...");
   LOG("Node C setup complete");
 }
 
@@ -145,15 +150,14 @@ void loop() {
       millis() - startTime
     );
 
-    // Send via B since C can't reach D
-    LOG("PRESS sending via B | reaction_ms=%lu hop=%d id=%u",
+    LOG("PRESS sending to D | reaction_ms=%lu hop=%d id=%u",
         (unsigned long)pkt.reaction_ms, pkt.hop_count, pkt.packet_id);
-    esp_now_send(macB, (uint8_t*)&pkt, sizeof(pkt));
+    sendPacket(macD, pkt, "PRESS to D");
 
     M5.Lcd.fillScreen(BLACK);
     M5.Lcd.setCursor(10, 30);
     M5.Lcd.setTextSize(2);
-    M5.Lcd.printf("Via B!\n%lu ms", pkt.reaction_ms);
+    M5.Lcd.printf("Sent!\n%lu ms", pkt.reaction_ms);
 
     gameStarted = false;
   }

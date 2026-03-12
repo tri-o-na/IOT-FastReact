@@ -38,6 +38,13 @@ void registerPeer(uint8_t* mac) {
   }
 }
 
+void sendPacket(const uint8_t* mac, GamePacket &pkt, const char* label) {
+  esp_err_t err = esp_now_send(mac, (uint8_t*)&pkt, sizeof(pkt));
+  if (err != ESP_OK) {
+    LOG("ERROR: %s failed immediately (err=%d)", label, err);
+  }
+}
+
 int playerIndexFromMac(const uint8_t originMac[6]) {
   if (macEquals(originMac, macA)) return 0;
   if (macEquals(originMac, macB)) return 1;
@@ -61,12 +68,17 @@ void broadcastStart() {
   GamePacket goA;
   initPacket(goA, PACKET_GO, myMac, macA, myMac, nextPacketId(packetCounter), 0);
   LOG("SEND GO to A | id=%u", goA.packet_id);
-  esp_now_send(macA, (uint8_t*)&goA, sizeof(goA));
+  sendPacket(macA, goA, "GO to A");
 
   GamePacket goB;
   initPacket(goB, PACKET_GO, myMac, macB, myMac, nextPacketId(packetCounter), 0);
-  LOG("SEND GO to B | id=%u (B will relay to C)", goB.packet_id);
-  esp_now_send(macB, (uint8_t*)&goB, sizeof(goB));
+  LOG("SEND GO to B | id=%u", goB.packet_id);
+  sendPacket(macB, goB, "GO to B");
+
+  GamePacket goC;
+  initPacket(goC, PACKET_GO, myMac, macC, myMac, nextPacketId(packetCounter), 0);
+  LOG("SEND GO to C | id=%u", goC.packet_id);
+  sendPacket(macC, goC, "GO to C");
 
   roundActive = true;
   M5.Lcd.fillScreen(BLACK);
@@ -80,12 +92,17 @@ void sendResultToPlayers() {
   GamePacket resultA;
   initPacket(resultA, PACKET_RESULT, myMac, macA, myMac, nextPacketId(packetCounter), 0);
   LOG("SEND RESULT to A | id=%u", resultA.packet_id);
-  esp_now_send(macA, (uint8_t*)&resultA, sizeof(resultA));
+  sendPacket(macA, resultA, "RESULT to A");
 
   GamePacket resultB;
   initPacket(resultB, PACKET_RESULT, myMac, macB, myMac, nextPacketId(packetCounter), 0);
-  LOG("SEND RESULT to B | id=%u (B will relay to C)", resultB.packet_id);
-  esp_now_send(macB, (uint8_t*)&resultB, sizeof(resultB));
+  LOG("SEND RESULT to B | id=%u", resultB.packet_id);
+  sendPacket(macB, resultB, "RESULT to B");
+
+  GamePacket resultC;
+  initPacket(resultC, PACKET_RESULT, myMac, macC, myMac, nextPacketId(packetCounter), 0);
+  LOG("SEND RESULT to C | id=%u", resultC.packet_id);
+  sendPacket(macC, resultC, "RESULT to C");
 }
 
 void declareWinner() {
@@ -255,9 +272,8 @@ void loop() {
       LOG("D button pressed | starting round");
       broadcastStart();
     } else {
-      LOG("D button pressed | manual reset");
-      sendResultToPlayers();
-      resetRound();
+      LOG("D button pressed | ending round early");
+      declareWinner();
     }
   }
 }

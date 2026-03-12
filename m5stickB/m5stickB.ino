@@ -5,7 +5,6 @@
 
 uint8_t myMac[6];
 uint8_t macA[] = {0x0C, 0x8B, 0x95, 0xA8, 0x1D, 0x2C};
-uint8_t macC[] = {0x4C, 0x75, 0x25, 0xCB, 0x7E, 0x54};
 uint8_t macD[] = {0xD4, 0xD4, 0xDA, 0x85, 0x4D, 0x98};
 
 bool lastButtonState = false;
@@ -13,7 +12,6 @@ unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 50;
 bool gameStarted = false;
 unsigned long startTime = 0;
-int relayCount = 0;
 uint16_t packetCounter = 0;
 DedupEntry dedupCache[DEDUP_CACHE_SIZE];
 uint8_t dedupIndex = 0;
@@ -30,6 +28,13 @@ void registerPeer(uint8_t* mac) {
     LOG("Registered peer %s on ch%d", macStr, ESPNOW_CHANNEL);
   } else {
     LOG("ERROR: Failed to register peer %s (err=%d)", macStr, res);
+  }
+}
+
+void sendPacket(const uint8_t* mac, GamePacket &pkt, const char* label) {
+  esp_err_t err = esp_now_send(mac, (uint8_t*)&pkt, sizeof(pkt));
+  if (err != ESP_OK) {
+    LOG("ERROR: %s failed immediately (err=%d)", label, err);
   }
 }
 
@@ -61,15 +66,7 @@ void onDataReceived(const esp_now_recv_info *recvInfo, const uint8_t *data, int 
     gameStarted = true;
     lastButtonState = false;
     lastDebounceTime = 0;
-    LOG("GO accepted | timer started at %lu ms | forwarding to C", startTime);
-
-    GamePacket relayPkt = pkt;
-    copyMac(relayPkt.dest_mac, macC);
-    setRelayFields(relayPkt, myMac);
-
-    char cStr[18]; macToStr(macC, cStr);
-    LOG("RELAY GO to C (%s) | hop=%d id=%u", cStr, relayPkt.hop_count, relayPkt.packet_id);
-    esp_now_send(macC, (uint8_t*)&relayPkt, sizeof(relayPkt));
+    LOG("GO accepted | timer started at %lu ms", startTime);
 
     M5.Lcd.fillScreen(BLACK);
     M5.Lcd.setCursor(10, 30);
@@ -89,32 +86,7 @@ void onDataReceived(const esp_now_recv_info *recvInfo, const uint8_t *data, int 
       M5.Lcd.println("Round done");
       M5.Lcd.setTextSize(1);
       M5.Lcd.println("Waiting for GO...");
-
-      GamePacket relayPkt = pkt;
-      copyMac(relayPkt.dest_mac, macC);
-      setRelayFields(relayPkt, myMac);
-      LOG("RELAY RESULT to C | hop=%d", relayPkt.hop_count);
-      esp_now_send(macC, (uint8_t*)&relayPkt, sizeof(relayPkt));
     }
-    return;
-  }
-
-  if (pkt.type == PACKET_PRESS &&
-      macEquals(pkt.dest_mac, macD) &&
-      macEquals(pkt.origin_mac, macC)) {
-    GamePacket relayPkt = pkt;
-    setRelayFields(relayPkt, myMac);
-    relayCount++;
-    LOG("RELAY PRESS from C to D | reaction_ms=%lu hop=%d relay#%d",
-        (unsigned long)relayPkt.reaction_ms, relayPkt.hop_count, relayCount);
-    esp_now_send(macD, (uint8_t*)&relayPkt, sizeof(relayPkt));
-
-    M5.Lcd.fillScreen(BLACK);
-    M5.Lcd.setCursor(10, 20);
-    M5.Lcd.setTextSize(2);
-    M5.Lcd.println("Relayed!");
-    M5.Lcd.setCursor(10, 50);
-    M5.Lcd.printf("Count: %d", relayCount);
     return;
   }
 
@@ -154,7 +126,6 @@ void setup() {
   esp_now_register_recv_cb(onDataReceived);
 
   registerPeer(macA);
-  registerPeer(macC);
   registerPeer(macD);
   resetDedupCache(dedupCache);
 
@@ -185,7 +156,7 @@ void loop() {
 
     LOG("PRESS sending to D | reaction_ms=%lu hop=%d id=%u",
         (unsigned long)pkt.reaction_ms, pkt.hop_count, pkt.packet_id);
-    esp_now_send(macD, (uint8_t*)&pkt, sizeof(pkt));
+    sendPacket(macD, pkt, "PRESS to D");
 
     M5.Lcd.fillScreen(BLACK);
     M5.Lcd.setCursor(10, 30);

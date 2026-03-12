@@ -6,6 +6,15 @@
 #include <stdint.h>
 #include <string.h>
 
+// Timestamped log macro — every log line starts with [millis]
+#define LOG(fmt, ...) Serial.printf("[%6lu] " fmt "\n", millis(), ##__VA_ARGS__)
+
+// Format a MAC address into a caller-supplied 18-byte buffer
+inline void macToStr(const uint8_t mac[6], char out[18]) {
+  snprintf(out, 18, "%02X:%02X:%02X:%02X:%02X:%02X",
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
 enum PacketType : uint8_t {
   PACKET_RREQ = 1,
   PACKET_RREP = 2,

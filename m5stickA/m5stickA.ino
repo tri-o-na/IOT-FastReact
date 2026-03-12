@@ -20,42 +20,63 @@ void registerPeer(uint8_t* mac) {
   memcpy(peer.peer_addr, mac, 6);
   peer.channel = ESPNOW_CHANNEL;
   peer.encrypt = false;
-  esp_now_add_peer(&peer);
+  char macStr[18];
+  macToStr(mac, macStr);
+  esp_err_t res = esp_now_add_peer(&peer);
+  if (res == ESP_OK) {
+    LOG("Registered peer %s on ch%d", macStr, ESPNOW_CHANNEL);
+  } else {
+    LOG("ERROR: Failed to register peer %s (err=%d)", macStr, res);
+  }
 }
 
 void onDataReceived(const esp_now_recv_info *recvInfo, const uint8_t *data, int len) {
+  char srcStr[18];
+  macToStr(recvInfo->src_addr, srcStr);
+  LOG("RECV from %s | len=%d", srcStr, len);
+
   if (len != sizeof(GamePacket)) {
+    LOG("DROP: wrong len (got %d, want %d)", len, (int)sizeof(GamePacket));
     return;
   }
 
   GamePacket pkt;
   memcpy(&pkt, data, sizeof(pkt));
 
+  char originStr[18]; macToStr(pkt.origin_mac, originStr);
+  char destStr[18];   macToStr(pkt.dest_mac, destStr);
+  LOG("PKT type=%d origin=%s dest=%s hop=%d id=%u",
+      pkt.type, originStr, destStr, pkt.hop_count, pkt.packet_id);
+
   if (isDuplicateAndRemember(dedupCache, dedupIndex, pkt.origin_mac, pkt.packet_id)) {
+    LOG("DROP: duplicate (origin=%s id=%u)", originStr, pkt.packet_id);
     return;
   }
 
   if (!isLocalMac(pkt.dest_mac, myMac)) {
+    LOG("DROP: not for me (dest=%s)", destStr);
     return;
   }
 
   if (pkt.type == PACKET_GO) {
     startTime = millis();
     gameStarted = true;
-    Serial.println("GO! Timer started.");
+    LOG("GO accepted | timer started at %lu ms", startTime);
     M5.Lcd.fillScreen(BLACK);
     M5.Lcd.setCursor(10, 30);
     M5.Lcd.setTextSize(3);
     M5.Lcd.println("GO!");
   } else if (pkt.type == PACKET_RESULT) {
     gameStarted = false;
-    Serial.println("Round complete. Resetting player state.");
+    LOG("RESULT received | round complete, resetting");
     M5.Lcd.fillScreen(BLACK);
     M5.Lcd.setCursor(10, 20);
     M5.Lcd.setTextSize(2);
     M5.Lcd.println("Round done");
     M5.Lcd.setTextSize(1);
     M5.Lcd.println("Waiting for GO...");
+  } else {
+    LOG("DROP: unhandled type=%d", pkt.type);
   }
 }
 
@@ -64,11 +85,31 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
   WiFi.mode(WIFI_STA);
-  configureEspNowChannel();
-  Serial.println("Node A ready");
-  Serial.printf("ESP-NOW channel locked to %d\n", ESPNOW_CHANNEL);
 
-  esp_now_init();
+  LOG("Node A | actual MAC: %s", WiFi.macAddress().c_str());
+  char expectedStr[18];
+  macToStr(myMac, expectedStr);
+  LOG("Node A | hardcoded myMac: %s", expectedStr);
+
+  if (!configureEspNowChannel()) {
+    LOG("ERROR: configureEspNowChannel() FAILED");
+  } else {
+    LOG("WiFi channel locked to %d", ESPNOW_CHANNEL);
+  }
+
+  if (esp_now_init() != ESP_OK) {
+    LOG("ERROR: esp_now_init() FAILED — no traffic will flow");
+  } else {
+    LOG("esp_now_init() OK");
+  }
+
+  esp_now_register_send_cb([](const uint8_t *mac, esp_now_send_status_t status) {
+    char macStr[18];
+    macToStr(mac, macStr);
+    LOG("SEND to %s: %s", macStr,
+        status == ESP_NOW_SEND_SUCCESS ? "OK" : "FAIL (no ack — wrong MAC or out of range?)");
+  });
+
   esp_now_register_recv_cb(onDataReceived);
 
   registerPeer(macD);
@@ -76,6 +117,7 @@ void setup() {
 
   M5.Lcd.setTextSize(2);
   M5.Lcd.println("Node A\nWaiting\nfor GO...");
+  LOG("Node A setup complete");
 }
 
 void loop() {
@@ -98,8 +140,9 @@ void loop() {
       millis() - startTime
     );
 
+    LOG("PRESS sending to D | reaction_ms=%lu hop=%d id=%u",
+        (unsigned long)pkt.reaction_ms, pkt.hop_count, pkt.packet_id);
     esp_now_send(macD, (uint8_t*)&pkt, sizeof(pkt));
-    Serial.printf("[A] Button pressed | reaction time: %lu ms\n", pkt.reaction_ms);
 
     M5.Lcd.fillScreen(BLACK);
     M5.Lcd.setCursor(10, 30);

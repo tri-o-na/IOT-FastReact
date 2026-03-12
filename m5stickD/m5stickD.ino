@@ -28,7 +28,14 @@ void registerPeer(uint8_t* mac) {
   memcpy(peer.peer_addr, mac, 6);
   peer.channel = ESPNOW_CHANNEL;
   peer.encrypt = false;
-  esp_now_add_peer(&peer);
+  char macStr[18];
+  macToStr(mac, macStr);
+  esp_err_t res = esp_now_add_peer(&peer);
+  if (res == ESP_OK) {
+    LOG("Registered peer %s on ch%d", macStr, ESPNOW_CHANNEL);
+  } else {
+    LOG("ERROR: Failed to register peer %s (err=%d)", macStr, res);
+  }
 }
 
 int playerIndexFromMac(const uint8_t originMac[6]) {
@@ -47,34 +54,37 @@ void resetRound() {
   M5.Lcd.setCursor(10, 20);
   M5.Lcd.setTextSize(2);
   M5.Lcd.println("Press D btn\nto START!");
-  Serial.println("--- Round reset. Press D button to START ---");
+  LOG("--- Round reset. Press D button to START ---");
 }
 
 void broadcastStart() {
   GamePacket goA;
   initPacket(goA, PACKET_GO, myMac, macA, myMac, nextPacketId(packetCounter), 0);
+  LOG("SEND GO to A | id=%u", goA.packet_id);
   esp_now_send(macA, (uint8_t*)&goA, sizeof(goA));
 
   GamePacket goB;
   initPacket(goB, PACKET_GO, myMac, macB, myMac, nextPacketId(packetCounter), 0);
+  LOG("SEND GO to B | id=%u (B will relay to C)", goB.packet_id);
   esp_now_send(macB, (uint8_t*)&goB, sizeof(goB));
-  // C gets GO via B
 
   roundActive = true;
   M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setCursor(10, 20);
   M5.Lcd.setTextSize(3);
   M5.Lcd.println("GO!");
-  Serial.println("START sent! Round is live.");
+  LOG("Round is live. Waiting for PRESS from A, B, C.");
 }
 
 void sendResultToPlayers() {
   GamePacket resultA;
   initPacket(resultA, PACKET_RESULT, myMac, macA, myMac, nextPacketId(packetCounter), 0);
+  LOG("SEND RESULT to A | id=%u", resultA.packet_id);
   esp_now_send(macA, (uint8_t*)&resultA, sizeof(resultA));
 
   GamePacket resultB;
   initPacket(resultB, PACKET_RESULT, myMac, macB, myMac, nextPacketId(packetCounter), 0);
+  LOG("SEND RESULT to B | id=%u (B will relay to C)", resultB.packet_id);
   esp_now_send(macB, (uint8_t*)&resultB, sizeof(resultB));
 }
 
@@ -93,26 +103,22 @@ void declareWinner() {
     }
   }
 
-  Serial.println("=== ROUND RESULT ===");
+  LOG("=== ROUND RESULT ===");
   for (auto& e : entries) {
     if (e.e->received) {
-      Serial.printf("  Player %s | reactionTime: %lu ms | hopCount: %d",
-        e.name, e.e->reactionMs, e.e->hopCount);
-      if (winner) {
-        Serial.printf(" | diff: +%lu ms\n", e.e->reactionMs - earliest);
-      } else {
-        Serial.printf("\n");
-      }
+      LOG("  Player %s | reactionMs=%lu | hop=%d | diff=+%lu ms",
+          e.name, e.e->reactionMs, e.e->hopCount,
+          e.e->reactionMs - earliest);
     } else {
-      Serial.printf("  Player %s | did not press\n", e.name);
+      LOG("  Player %s | did not press", e.name);
     }
   }
   if (winner) {
-    Serial.printf("  >> WINNER: Player %s <<\n", winner);
+    LOG("  >> WINNER: Player %s <<", winner);
   } else {
-    Serial.println("  >> NO WINNER <<");
+    LOG("  >> NO WINNER <<");
   }
-  Serial.println("====================");
+  LOG("====================");
 
   M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setCursor(10, 10);
@@ -137,34 +143,66 @@ void declareWinner() {
 }
 
 void onDataReceived(const esp_now_recv_info *recvInfo, const uint8_t *data, int len) {
-  if (!roundActive) return;
-  if (len != sizeof(GamePacket)) return;
+  char srcStr[18];
+  macToStr(recvInfo->src_addr, srcStr);
+  LOG("RECV from %s | len=%d | roundActive=%d", srcStr, len, roundActive);
+
+  if (!roundActive) {
+    LOG("DROP: round not active");
+    return;
+  }
+
+  if (len != sizeof(GamePacket)) {
+    LOG("DROP: wrong len (got %d, want %d)", len, (int)sizeof(GamePacket));
+    return;
+  }
 
   GamePacket pkt;
   memcpy(&pkt, data, sizeof(pkt));
 
-  if (pkt.type != PACKET_PRESS) return;
-  if (!isLocalMac(pkt.dest_mac, myMac)) return;
-  if (isDuplicateAndRemember(dedupCache, dedupIndex, pkt.origin_mac, pkt.packet_id)) return;
+  char originStr[18]; macToStr(pkt.origin_mac, originStr);
+  char destStr[18];   macToStr(pkt.dest_mac, destStr);
+  LOG("PKT type=%d origin=%s dest=%s hop=%d id=%u reaction_ms=%lu",
+      pkt.type, originStr, destStr, pkt.hop_count, pkt.packet_id,
+      (unsigned long)pkt.reaction_ms);
 
-  int playerIndex = playerIndexFromMac(pkt.origin_mac);
-  if (playerIndex == 0 && !pressA.received) {
-    pressA = {pkt.reaction_ms, pkt.hop_count, true};
-    Serial.printf("[D] Player A pressed | reaction time: %lu ms | hopCount: %d\n",
-      pkt.reaction_ms, pkt.hop_count);
-  } else if (playerIndex == 1 && !pressB.received) {
-    pressB = {pkt.reaction_ms, pkt.hop_count, true};
-    Serial.printf("[D] Player B pressed | reaction time: %lu ms | hopCount: %d\n",
-      pkt.reaction_ms, pkt.hop_count);
-  } else if (playerIndex == 2 && !pressC.received) {
-    pressC = {pkt.reaction_ms, pkt.hop_count, true};
-    Serial.printf("[D] Player C pressed | reaction time: %lu ms | hopCount: %d\n",
-      pkt.reaction_ms, pkt.hop_count);
-  } else {
+  if (pkt.type != PACKET_PRESS) {
+    LOG("DROP: not a PRESS (type=%d)", pkt.type);
     return;
   }
 
-  if (pressA.received && pressB.received && pressC.received) {
+  if (!isLocalMac(pkt.dest_mac, myMac)) {
+    LOG("DROP: not for me (dest=%s)", destStr);
+    return;
+  }
+
+  if (isDuplicateAndRemember(dedupCache, dedupIndex, pkt.origin_mac, pkt.packet_id)) {
+    LOG("DROP: duplicate (origin=%s id=%u)", originStr, pkt.packet_id);
+    return;
+  }
+
+  int playerIndex = playerIndexFromMac(pkt.origin_mac);
+  if (playerIndex < 0) {
+    LOG("DROP: unknown origin MAC %s", originStr);
+    return;
+  }
+
+  const char* playerNames[] = {"A", "B", "C"};
+  PressEvent* slots[] = {&pressA, &pressB, &pressC};
+
+  if (slots[playerIndex]->received) {
+    LOG("DROP: already have PRESS from player %s", playerNames[playerIndex]);
+    return;
+  }
+
+  *slots[playerIndex] = {pkt.reaction_ms, pkt.hop_count, true};
+  LOG("ACCEPTED PRESS from player %s | reaction_ms=%lu hop=%d",
+      playerNames[playerIndex], (unsigned long)pkt.reaction_ms, pkt.hop_count);
+
+  bool allReceived = pressA.received && pressB.received && pressC.received;
+  LOG("Press state: A=%d B=%d C=%d", pressA.received, pressB.received, pressC.received);
+
+  if (allReceived) {
     declareWinner();
   }
 }
@@ -174,10 +212,31 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
   WiFi.mode(WIFI_STA);
-  configureEspNowChannel();
-  Serial.printf("ESP-NOW channel locked to %d\n", ESPNOW_CHANNEL);
 
-  esp_now_init();
+  LOG("Node D | actual MAC: %s", WiFi.macAddress().c_str());
+  char expectedStr[18];
+  macToStr(myMac, expectedStr);
+  LOG("Node D | hardcoded myMac: %s", expectedStr);
+
+  if (!configureEspNowChannel()) {
+    LOG("ERROR: configureEspNowChannel() FAILED");
+  } else {
+    LOG("WiFi channel locked to %d", ESPNOW_CHANNEL);
+  }
+
+  if (esp_now_init() != ESP_OK) {
+    LOG("ERROR: esp_now_init() FAILED — no traffic will flow");
+  } else {
+    LOG("esp_now_init() OK");
+  }
+
+  esp_now_register_send_cb([](const uint8_t *mac, esp_now_send_status_t status) {
+    char macStr[18];
+    macToStr(mac, macStr);
+    LOG("SEND to %s: %s", macStr,
+        status == ESP_NOW_SEND_SUCCESS ? "OK" : "FAIL (no ack — wrong MAC or out of range?)");
+  });
+
   esp_now_register_recv_cb(onDataReceived);
 
   registerPeer(macA);
@@ -185,7 +244,7 @@ void setup() {
   registerPeer(macC);
   resetDedupCache(dedupCache);
 
-  Serial.println("Node D server ready");
+  LOG("Node D server ready");
   resetRound();
 }
 
@@ -193,9 +252,10 @@ void loop() {
   M5.update();
   if (M5.BtnA.wasPressed()) {
     if (!roundActive) {
+      LOG("D button pressed | starting round");
       broadcastStart();
     } else {
-      Serial.println("Manual reset!");
+      LOG("D button pressed | manual reset");
       sendResultToPlayers();
       resetRound();
     }

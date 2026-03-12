@@ -105,9 +105,9 @@ void setup() {
     LOG("esp_now_init() OK");
   }
 
-  esp_now_register_send_cb([](const uint8_t *mac, esp_now_send_status_t status) {
+  esp_now_register_send_cb([](const wifi_tx_info_t *info, esp_now_send_status_t status) {
     char macStr[18];
-    macToStr(mac, macStr);
+    macToStr(info->des_addr, macStr);
     LOG("SEND to %s: %s", macStr,
         status == ESP_NOW_SEND_SUCCESS ? "OK" : "FAIL (no ack — wrong MAC or out of range?)");
   });

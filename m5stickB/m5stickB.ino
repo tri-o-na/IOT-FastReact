@@ -7,7 +7,7 @@
 
 uint8_t myMac[6];
 uint8_t macA[] = {0x0C, 0x8B, 0x95, 0xA8, 0x1D, 0x2C};
-uint8_t macD[] = {0xD4, 0xD4, 0xDA, 0x85, 0x4D, 0x98};
+uint8_t serverMac[] = {0xD4, 0xD4, 0xDA, 0x85, 0x4D, 0x98};
 uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 bool lastButtonState = false;
@@ -59,13 +59,13 @@ void setup() {
   esp_now_register_recv_cb(onDataReceived);
 
   registerPeer(macA);
-  registerPeer(macD);
+  registerPeer(serverMac);
   registerPeer(broadcastMac);
   resetSeenTable(seenTable);
   resetRouteTable(routeTable);
 
   delay(100);
-  sendInitialRREQ(myMac, macD, broadcastMac, packetCounter);
+  sendInitialRREQ(myMac, serverMac, broadcastMac, packetCounter);
 
   M5.Lcd.setTextSize(2);
   M5.Lcd.println("Node B\nWaiting\nfor GO...");
@@ -73,6 +73,6 @@ void setup() {
 }
 
 void loop() {
-  handleButtonNodeLoop(myMac, macD, packetCounter, gameStarted, lastButtonState,
+  handleButtonNodeLoop(myMac, serverMac, packetCounter, gameStarted, lastButtonState,
                        lastDebounceTime, debounceDelay, startTime);
 }

@@ -248,7 +248,7 @@ void setup() {
 
   char actualStr[18];
   macToStr(myMac, actualStr);
-  LOG("Node D | actual MAC: %s", actualStr);
+  LOG("Server | actual MAC: %s", actualStr);
 
   if (!configureEspNowChannel()) {
     LOG("ERROR: configureEspNowChannel() FAILED");
@@ -278,7 +278,7 @@ void setup() {
   resetSeenTable(seenTable);
   resetRouteTable(routeTable);
 
-  LOG("Node D server ready");
+  LOG("Server ready");
   resetRound();
 }
 

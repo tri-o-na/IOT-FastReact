@@ -167,9 +167,9 @@ inline void handleButtonNodeLoop(const uint8_t *myMac,
       DEFAULT_TTL
     );
 
-    LOG("PRESS sending to D | reaction_ms=%lu hop=%d id=%u",
+    LOG("PRESS sending to server | reaction_ms=%lu hop=%d id=%u",
         (unsigned long)pkt.reaction_ms, pkt.hop_count, pkt.packet_id);
-    sendPacket(serverMac, pkt, "PRESS to D");
+    sendPacket(serverMac, pkt, "PRESS to server");
 
     M5.Lcd.fillScreen(BLACK);
     M5.Lcd.setCursor(10, 30);

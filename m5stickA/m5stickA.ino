@@ -6,7 +6,7 @@
 #include "../general_utils.h"
 
 uint8_t myMac[6];
-uint8_t macD[] = {0xD4, 0xD4, 0xDA, 0x85, 0x4D, 0x98};
+uint8_t serverMac[] = {0xD4, 0xD4, 0xDA, 0x85, 0x4D, 0x98};
 uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 bool lastButtonState = false;
@@ -57,13 +57,13 @@ void setup() {
 
   esp_now_register_recv_cb(onDataReceived);
 
-  registerPeer(macD);
+  registerPeer(serverMac);
   registerPeer(broadcastMac);
   resetSeenTable(seenTable);
   resetRouteTable(routeTable);
 
   delay(100);
-  sendInitialRREQ(myMac,macD,broadcastMac,packetCounter);    //advertises RREQ on boot
+  sendInitialRREQ(myMac, serverMac, broadcastMac, packetCounter);    // advertises RREQ on boot
 
   M5.Lcd.setTextSize(2);
   M5.Lcd.println("Node A\nWaiting\nfor GO...");
@@ -71,6 +71,6 @@ void setup() {
 }
 
 void loop() {
-  handleButtonNodeLoop(myMac, macD, packetCounter, gameStarted, lastButtonState,
+  handleButtonNodeLoop(myMac, serverMac, packetCounter, gameStarted, lastButtonState,
                        lastDebounceTime, debounceDelay, startTime);
 }

@@ -20,8 +20,7 @@ PressEvent pressC = {0, 0, false};
 
 bool roundActive = false;
 uint16_t packetCounter = 0;
-DedupEntry dedupCache[DEDUP_CACHE_SIZE];
-uint8_t dedupIndex = 0;
+SeenEntry seenTable[MAX_SEEN_ENTRIES];
 
 void registerPeer(uint8_t* mac) {
   esp_now_peer_info_t peer = {};
@@ -66,17 +65,17 @@ void resetRound() {
 
 void broadcastStart() {
   GamePacket goA;
-  initPacket(goA, PACKET_GO, myMac, macA, myMac, nextPacketId(packetCounter), 0);
+  initPacket(goA, PACKET_GO, myMac, macA, myMac, nextPacketId(packetCounter), 0,DEFAULT_TTL);
   LOG("SEND GO to A | id=%u", goA.packet_id);
   sendPacket(macA, goA, "GO to A");
 
   GamePacket goB;
-  initPacket(goB, PACKET_GO, myMac, macB, myMac, nextPacketId(packetCounter), 0);
+  initPacket(goB, PACKET_GO, myMac, macB, myMac, nextPacketId(packetCounter), 0,DEFAULT_TTL);
   LOG("SEND GO to B | id=%u", goB.packet_id);
   sendPacket(macB, goB, "GO to B");
 
   GamePacket goC;
-  initPacket(goC, PACKET_GO, myMac, macC, myMac, nextPacketId(packetCounter), 0);
+  initPacket(goC, PACKET_GO, myMac, macC, myMac, nextPacketId(packetCounter), 0,DEFAULT_TTL);
   LOG("SEND GO to C | id=%u", goC.packet_id);
   sendPacket(macC, goC, "GO to C");
 
@@ -90,17 +89,17 @@ void broadcastStart() {
 
 void sendResultToPlayers() {
   GamePacket resultA;
-  initPacket(resultA, PACKET_RESULT, myMac, macA, myMac, nextPacketId(packetCounter), 0);
+  initPacket(resultA, PACKET_RESULT, myMac, macA, myMac, nextPacketId(packetCounter), 0,DEFAULT_TTL);
   LOG("SEND RESULT to A | id=%u", resultA.packet_id);
   sendPacket(macA, resultA, "RESULT to A");
 
   GamePacket resultB;
-  initPacket(resultB, PACKET_RESULT, myMac, macB, myMac, nextPacketId(packetCounter), 0);
+  initPacket(resultB, PACKET_RESULT, myMac, macB, myMac, nextPacketId(packetCounter), 0,DEFAULT_TTL);
   LOG("SEND RESULT to B | id=%u", resultB.packet_id);
   sendPacket(macB, resultB, "RESULT to B");
 
   GamePacket resultC;
-  initPacket(resultC, PACKET_RESULT, myMac, macC, myMac, nextPacketId(packetCounter), 0);
+  initPacket(resultC, PACKET_RESULT, myMac, macC, myMac, nextPacketId(packetCounter), 0,DEFAULT_TTL);
   LOG("SEND RESULT to C | id=%u", resultC.packet_id);
   sendPacket(macC, resultC, "RESULT to C");
 }
@@ -193,7 +192,7 @@ void onDataReceived(const esp_now_recv_info *recvInfo, const uint8_t *data, int 
     return;
   }
 
-  if (isDuplicateAndRemember(dedupCache, dedupIndex, pkt.origin_mac, pkt.packet_id)) {
+  if (seenCheck(seenTable, pkt.origin_mac, pkt.packet_id)) {
     LOG("DROP: duplicate (origin=%s id=%u)", originStr, pkt.packet_id);
     return;
   }
@@ -259,7 +258,7 @@ void setup() {
   registerPeer(macA);
   registerPeer(macB);
   registerPeer(macC);
-  resetDedupCache(dedupCache);
+  resetSeenTable(seenTable);
 
   LOG("Node D server ready");
   resetRound();

@@ -25,8 +25,8 @@ enum PacketType : uint8_t {
   PACKET_RESULT = 7,
 };
 
-#define DEDUP_CACHE_SIZE 8
 #define ESPNOW_CHANNEL 1
+#define DEFAULT_TTL 6
 struct GamePacket {
   uint8_t type;
   uint8_t origin_mac[6];
@@ -35,18 +35,23 @@ struct GamePacket {
   uint16_t packet_id;
   uint8_t hop_count;
   uint32_t reaction_ms;
+  uint8_t ttl;
 } __attribute__((packed));
 
-static_assert(sizeof(GamePacket) == 26, "GamePacket size mismatch");
-
+static_assert(sizeof(GamePacket) == 27, "GamePacket size mismatch");
 // reaction_ms is elapsed time from GO reception to button press, not wall-clock time.
 // sender_mac is kept in-band so relay logic and logs do not depend on callback-only metadata.
 // packed is required to keep the wire format stable across nodes and avoid padding drift.
 
-struct DedupEntry {
-  uint8_t origin_mac[6];
-  uint16_t packet_id;
-  bool valid;
+
+#define MAX_SEEN_ENTRIES 30
+#define SEEN_EXPIRY_MS 5000
+
+struct SeenEntry {
+  uint8_t       origin_mac[6];
+  uint16_t      packet_id;
+  unsigned long expiry_time;
+  bool          valid;
 };
 
 inline void copyMac(uint8_t dest[6], const uint8_t src[6]) {
@@ -67,7 +72,8 @@ inline void initPacket(GamePacket &pkt,
                        const uint8_t dest_mac[6],
                        const uint8_t sender_mac[6],
                        uint16_t packet_id,
-                       uint32_t reaction_ms) {
+                       uint32_t reaction_ms,
+                       uint8_t ttl) {
   pkt.type = type;
   copyMac(pkt.origin_mac, origin_mac);
   copyMac(pkt.dest_mac, dest_mac);
@@ -75,11 +81,15 @@ inline void initPacket(GamePacket &pkt,
   pkt.packet_id = packet_id;
   pkt.hop_count = 0;
   pkt.reaction_ms = reaction_ms;
+  pkt.ttl = ttl;
 }
 
 inline void setRelayFields(GamePacket &pkt, const uint8_t sender_mac[6]) {
   copyMac(pkt.sender_mac, sender_mac);
   pkt.hop_count++;
+  if (pkt.ttl >= 1) {
+    pkt.ttl--;
+  }
 }
 
 inline uint16_t nextPacketId(uint16_t &counter) {
@@ -90,30 +100,80 @@ inline uint16_t nextPacketId(uint16_t &counter) {
   return counter;
 }
 
-inline void resetDedupCache(DedupEntry cache[DEDUP_CACHE_SIZE]) {
-  for (int i = 0; i < DEDUP_CACHE_SIZE; ++i) {
-    cache[i].valid = false;
-    cache[i].packet_id = 0;
+inline void resetSeenTable(SeenEntry table[MAX_SEEN_ENTRIES]) {
+  for (int i = 0; i < MAX_SEEN_ENTRIES; ++i) {
+    table[i].valid = false;
+    table[i].packet_id = 0;
+    table[i].expiry_time = 0;
   }
 }
 
-inline bool isDuplicateAndRemember(DedupEntry cache[DEDUP_CACHE_SIZE],
-                                   uint8_t &next_index,
-                                   const uint8_t origin_mac[6],
-                                   uint16_t packet_id) {
-  for (int i = 0; i < DEDUP_CACHE_SIZE; ++i) {
-    if (cache[i].valid &&
-        cache[i].packet_id == packet_id &&
-        macEquals(cache[i].origin_mac, origin_mac)) {
+inline void expireSeenEntries(SeenEntry table[MAX_SEEN_ENTRIES]) {
+  unsigned long now = millis();
+  for (int i = 0; i < MAX_SEEN_ENTRIES; ++i) {
+    if (table[i].valid && now >= table[i].expiry_time) {
+      table[i].valid = false;
+    }
+  }
+}
+
+inline bool isSeen(SeenEntry table[MAX_SEEN_ENTRIES],
+                   const uint8_t origin_mac[6],
+                   uint16_t packet_id) {
+  for (int i = 0; i < MAX_SEEN_ENTRIES; ++i) {
+    if (table[i].valid &&
+        table[i].packet_id == packet_id &&
+        macEquals(table[i].origin_mac, origin_mac)) {
       return true;
     }
   }
+  return false;
+}
 
-  DedupEntry &slot = cache[next_index];
-  slot.valid = true;
-  slot.packet_id = packet_id;
-  copyMac(slot.origin_mac, origin_mac);
-  next_index = (next_index + 1) % DEDUP_CACHE_SIZE;
+inline void markSeen(SeenEntry table[MAX_SEEN_ENTRIES],
+                     const uint8_t origin_mac[6],
+                     uint16_t packet_id) {
+  for (int i = 0; i < MAX_SEEN_ENTRIES; ++i) {
+    if (table[i].valid &&
+        table[i].packet_id == packet_id &&
+        macEquals(table[i].origin_mac, origin_mac)) {
+      return;
+    }
+  }
+
+  for (int i = 0; i < MAX_SEEN_ENTRIES; ++i) {
+    if (!table[i].valid) {
+      table[i].valid = true;
+      table[i].packet_id = packet_id;
+      table[i].expiry_time = millis() + SEEN_EXPIRY_MS;
+      copyMac(table[i].origin_mac, origin_mac);
+      return;
+
+    }
+  }
+
+  int oldest_idx = 0;
+  for (int i = 1; i < MAX_SEEN_ENTRIES; ++i) {
+    if (table[i].expiry_time < table[oldest_idx].expiry_time) {
+      oldest_idx = i;
+    }
+  }
+
+  table[oldest_idx].valid = true;
+  table[oldest_idx].packet_id = packet_id;
+  table[oldest_idx].expiry_time = millis() + SEEN_EXPIRY_MS;
+  copyMac(table[oldest_idx].origin_mac, origin_mac);
+  return;
+}
+
+inline bool seenCheck(SeenEntry table[MAX_SEEN_ENTRIES],
+                      const uint8_t origin_mac[6],
+                      uint16_t packet_id) {
+  expireSeenEntries(table);
+  if (isSeen(table, origin_mac, packet_id)) {
+    return true;
+  }
+  markSeen(table, origin_mac, packet_id);
   return false;
 }
 

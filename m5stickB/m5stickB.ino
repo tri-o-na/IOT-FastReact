@@ -13,8 +13,7 @@ const unsigned long debounceDelay = 50;
 bool gameStarted = false;
 unsigned long startTime = 0;
 uint16_t packetCounter = 0;
-DedupEntry dedupCache[DEDUP_CACHE_SIZE];
-uint8_t dedupIndex = 0;
+SeenEntry seenTable[MAX_SEEN_ENTRIES];
 
 void registerPeer(uint8_t* mac) {
   esp_now_peer_info_t peer = {};
@@ -56,7 +55,7 @@ void onDataReceived(const esp_now_recv_info *recvInfo, const uint8_t *data, int 
   LOG("PKT type=%d origin=%s dest=%s hop=%d id=%u",
       pkt.type, originStr, destStr, pkt.hop_count, pkt.packet_id);
 
-  if (isDuplicateAndRemember(dedupCache, dedupIndex, pkt.origin_mac, pkt.packet_id)) {
+  if (seenCheck(seenTable, pkt.origin_mac, pkt.packet_id)) {
     LOG("DROP: duplicate (origin=%s id=%u)", originStr, pkt.packet_id);
     return;
   }
@@ -127,7 +126,7 @@ void setup() {
 
   registerPeer(macA);
   registerPeer(macD);
-  resetDedupCache(dedupCache);
+  resetSeenTable(seenTable);
 
   M5.Lcd.setTextSize(2);
   M5.Lcd.println("Node B\nWaiting\nfor GO...");
@@ -151,7 +150,8 @@ void loop() {
       macD,
       myMac,
       nextPacketId(packetCounter),
-      millis() - startTime
+      millis() - startTime,
+      DEFAULT_TTL
     );
 
     LOG("PRESS sending to D | reaction_ms=%lu hop=%d id=%u",

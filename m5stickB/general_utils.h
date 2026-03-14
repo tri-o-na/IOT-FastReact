@@ -194,6 +194,16 @@ inline void handleButtonNodeReceive(const esp_now_recv_info *recvInfo,
     return;
   }
 
+  if (pkt.type == PACKET_RESULT && !isLocalMac(pkt.dest_mac, myMac)) {
+    if (seenCheck(seenTable, pkt.origin_mac, pkt.packet_id)) {
+      LOG("RESULT: DROP duplicate (origin=%s id=%u)", originStr, pkt.packet_id);
+      return;
+    }
+
+    sendViaRoute(routeTable, pkt.dest_mac, pkt, "RESULT forward", myMac);
+    return;
+  }
+
   if (!isLocalMac(pkt.dest_mac, myMac)) {
     LOG("DROP: not for me (dest=%s)", destStr);
     return;

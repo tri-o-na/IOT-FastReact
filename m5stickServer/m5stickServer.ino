@@ -88,22 +88,25 @@ void sendResultToPlayers() {
   if (playerActiveA) {
     GamePacket resultA;
     initPacket(resultA, PACKET_RESULT, myMac, macA, myMac, nextPacketId(packetCounter), 0, DEFAULT_TTL);
-    LOG("SEND RESULT to A | id=%u", resultA.packet_id);
-    sendPacket(macA, resultA, "RESULT to A");
+    if (!sendViaRoute(routeTable, macA, resultA, "RESULT to A")) {
+      LOG("RESULT: failed to route to A");
+    }
   }
 
   if (playerActiveB) {
     GamePacket resultB;
     initPacket(resultB, PACKET_RESULT, myMac, macB, myMac, nextPacketId(packetCounter), 0, DEFAULT_TTL);
-    LOG("SEND RESULT to B | id=%u", resultB.packet_id);
-    sendPacket(macB, resultB, "RESULT to B");
+    if (!sendViaRoute(routeTable, macB, resultB, "RESULT to B")) {
+      LOG("RESULT: failed to route to B");
+    }
   }
 
   if (playerActiveC) {
     GamePacket resultC;
     initPacket(resultC, PACKET_RESULT, myMac, macC, myMac, nextPacketId(packetCounter), 0, DEFAULT_TTL);
-    LOG("SEND RESULT to C | id=%u", resultC.packet_id);
-    sendPacket(macC, resultC, "RESULT to C");
+    if (!sendViaRoute(routeTable, macC, resultC, "RESULT to C")) {
+      LOG("RESULT: failed to route to C");
+    }
   }
 }
 

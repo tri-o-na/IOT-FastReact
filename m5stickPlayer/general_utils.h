@@ -56,7 +56,9 @@ inline void handleButtonNodeReceive(const esp_now_recv_info *recvInfo,
                                     bool &lastButtonState,
                                     unsigned long &lastDebounceTime,
                                     unsigned long &startTime,
-                                    uint8_t *serverMac) {
+                                    uint8_t *serverMac,
+                                    int &myPlayerId,
+                                    uint8_t &myResultStatus) {
   char srcStr[18];
   macToStr(recvInfo->src_addr, srcStr);
   LOG("RECV from %s | len=%d", srcStr, len);
@@ -177,6 +179,8 @@ inline void handleButtonNodeReceive(const esp_now_recv_info *recvInfo,
 
     // NEW: Capture server MAC from GO packet origin
     copyMac(serverMac, pkt.origin_mac);
+    // Capture player ID assigned by server (encoded in reaction_ms)
+    myPlayerId = (int)pkt.reaction_ms;
     
     startTime = millis();
     gameStarted = true;
@@ -251,9 +255,10 @@ inline void handleButtonNodeReceive(const esp_now_recv_info *recvInfo,
     pendingPressValid = false;
     awaitingAck = false;
     ackDeadline = 0;
+    myResultStatus = (uint8_t)pkt.reaction_ms; // 0=lose, 1=win, 2=tie
     uiEvent = BUTTON_UI_RESULT;
     lastButtonState = false;
-    LOG("RESULT received | round complete, resetting");
+    LOG("RESULT received | round complete, status=%d", myResultStatus);
   } else {
     LOG("DROP: unhandled type=%d", pkt.type);
   }
@@ -275,7 +280,9 @@ inline void handleButtonNodeLoop(const uint8_t *myMac,
                                  unsigned long &lastRouteRequestTime,
                                  unsigned long debounceDelay,
                                  unsigned long startTime,
-                                 uint8_t *serverMac) {
+                                 uint8_t *serverMac,
+                                 int myPlayerId,
+                                 uint8_t myResultStatus) {
   M5.update();
   if (M5.BtnB.wasPressed()) {
     lastRouteRequestTime = millis();
@@ -301,6 +308,16 @@ inline void handleButtonNodeLoop(const uint8_t *myMac,
       M5.Lcd.setTextSize(2);
       M5.Lcd.println("Round done");
       M5.Lcd.setTextSize(1);
+      if (myPlayerId >= 0) {
+        M5.Lcd.printf("Player ID: %d\n", myPlayerId);
+      }
+      if (myResultStatus == 1) {
+        M5.Lcd.println("You Win!");
+      } else if (myResultStatus == 2) {
+        M5.Lcd.println("Tie!");
+      } else {
+        M5.Lcd.println("You Lose!");
+      }
       M5.Lcd.println("Waiting for GO...");
     } else if (uiEvent == BUTTON_UI_DELIVERED) {
       M5.Lcd.setCursor(10, 30);

@@ -117,7 +117,7 @@ bool sendGoToPlayer(const uint8_t destMac[6], int playerIdx) {
   
   GamePacket goPkt;
   initPacket(goPkt, PACKET_GO, myMac, destMac, myMac,
-             nextPacketId(packetCounter), 0, DEFAULT_TTL);
+             nextPacketId(packetCounter), (uint32_t)playerIdx, DEFAULT_TTL);
   char label[32];
   snprintf(label, sizeof(label), "GO to player %d (%s)", playerIdx, macStr);
   
@@ -181,11 +181,19 @@ void broadcastStart() {
       sentCount, activePlayerCount);
 }
 
-void sendResultToPlayers() {
+void sendResultToPlayers(int winnerIdx, bool isTie, unsigned long earliest) {
   for (int i = 0; i < activePlayerCount; i++) {
+    uint32_t status;
+    if (isTie && playerPresses[i].received && playerPresses[i].reactionMs == earliest) {
+      status = 2; // tie
+    } else if (!isTie && i == winnerIdx) {
+      status = 1; // win
+    } else {
+      status = 0; // lose
+    }
     GamePacket resultPkt;
     initPacket(resultPkt, PACKET_RESULT, myMac, players[i].mac, myMac, 
-               nextPacketId(packetCounter), 0, DEFAULT_TTL);
+               nextPacketId(packetCounter), status, DEFAULT_TTL);
     char label[32];
     snprintf(label, sizeof(label), "RESULT to player %d", i);
     if (!sendViaRoute(routeTable, players[i].mac, resultPkt, label)) {
@@ -198,13 +206,19 @@ void declareWinner() {
   roundActive = false;
   winnerPending = false;
 
-  const char* winner = nullptr;
+  int winnerIdx = -1;
+  bool isTie = false;
   unsigned long earliest = ULONG_MAX;
   
   for (int i = 0; i < activePlayerCount; i++) {
-    if (playerPresses[i].received && playerPresses[i].reactionMs < earliest) {
-      earliest = playerPresses[i].reactionMs;
-      winner = (const char*)(intptr_t)i; // Store index as pointer
+    if (playerPresses[i].received) {
+      if (playerPresses[i].reactionMs < earliest) {
+        earliest = playerPresses[i].reactionMs;
+        winnerIdx = i;
+        isTie = false;
+      } else if (playerPresses[i].reactionMs == earliest) {
+        isTie = true;
+      }
     }
   }
 
@@ -221,8 +235,9 @@ void declareWinner() {
     }
   }
   
-  if (winner) {
-    int winnerIdx = (intptr_t)winner;
+  if (isTie) {
+    LOG("  >> TIE <<");
+  } else if (winnerIdx >= 0) {
     LOG("  >> WINNER: Player %d <<", winnerIdx);
   } else {
     LOG("  >> NO WINNER <<");
@@ -232,8 +247,18 @@ void declareWinner() {
   M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setCursor(10, 10);
   M5.Lcd.setTextSize(2);
-  if (winner) {
-    int winnerIdx = (intptr_t)winner;
+  if (isTie) {
+    M5.Lcd.print("Tie: ");
+    bool first = true;
+    for (int i = 0; i < activePlayerCount; i++) {
+      if (playerPresses[i].received && playerPresses[i].reactionMs == earliest) {
+        if (!first) M5.Lcd.print(",");
+        M5.Lcd.printf("P%d", i);
+        first = false;
+      }
+    }
+    M5.Lcd.println();
+  } else if (winnerIdx >= 0) {
     M5.Lcd.printf("Winner: P%d!\n\n", winnerIdx);
   } else {
     M5.Lcd.println("No winner\n");
@@ -247,7 +272,7 @@ void declareWinner() {
     }
   }
 
-  sendResultToPlayers();
+  sendResultToPlayers(winnerIdx, isTie, earliest);
   delay(3000);
   resetRound();
 }

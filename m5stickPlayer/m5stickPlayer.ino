@@ -24,12 +24,15 @@ unsigned long lastRouteRequestTime = 0;
 uint16_t packetCounter = 0;
 SeenEntry seenTable[MAX_SEEN_ENTRIES];
 RouteEntry routeTable[MAX_ROUTE_ENTRIES];
+int myPlayerId = -1;
+uint8_t myResultStatus = 0;
 
 void onDataReceived(const esp_now_recv_info *recvInfo, const uint8_t *data, int len) {
   handleButtonNodeReceive(recvInfo, data, len, myMac, broadcastMac, packetCounter,
                           seenTable, routeTable, gameStarted, pendingPressValid,
                           awaitingAck, ackDeadline, uiEvent, deliveredReactionMs,
-                          pendingPress, lastButtonState, lastDebounceTime, startTime, serverMac);
+                          pendingPress, lastButtonState, lastDebounceTime, startTime, serverMac,
+                          myPlayerId, myResultStatus);
 }
 
 void setup() {
@@ -82,5 +85,6 @@ void loop() {
   handleButtonNodeLoop(myMac, broadcastMac, packetCounter, routeTable,
                        gameStarted, pendingPressValid, awaitingAck, ackDeadline,
                        uiEvent, deliveredReactionMs, pendingPress, lastButtonState, lastDebounceTime,
-                       lastRouteRequestTime, debounceDelay, startTime, serverMac);
+                       lastRouteRequestTime, debounceDelay, startTime, serverMac,
+                       myPlayerId, myResultStatus);
 }

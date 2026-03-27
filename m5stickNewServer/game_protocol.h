@@ -91,6 +91,11 @@ struct RouteEntry {
 
 #define MAX_SEEN_ENTRIES 30
 #define SEEN_EXPIRY_MS 5000
+
+// ============ ROUND TIMEOUT & ONLINE TRACKING (Risk #2 & #4 fixes) ============
+#define ROUND_TIMEOUT_MS 15000              // 15 seconds max round duration
+#define PLAYER_HEARTBEAT_TIMEOUT_MS 5000    // Mark player offline if no route for 5s
+
 struct SeenEntry {
   uint8_t       origin_mac[6];
   uint16_t      packet_id;

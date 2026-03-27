@@ -15,7 +15,9 @@ struct PlayerInfo {
   uint8_t mac[6];
   bool active;  // Selected for the current round.
   bool hasRoute;
+  bool online;                    // Risk #4 fix: track if player is online
   unsigned long discoveryTime;
+  unsigned long lastHeartbeat;    // Risk #4 fix: track last route refresh
 };
 
 struct PressEvent {
@@ -30,6 +32,7 @@ bool winnerPending = false;
 uint16_t packetCounter = 0;
 SeenEntry seenTable[MAX_SEEN_ENTRIES];
 RouteEntry routeTable[MAX_ROUTE_ENTRIES];
+unsigned long roundStartTime = 0;  // Risk #2 fix: track round start for timeout
 
 PlayerInfo players[MAX_PLAYERS];
 PressEvent playerPresses[MAX_PLAYERS];
@@ -68,7 +71,9 @@ void registerPlayer(const uint8_t playerMac[6]) {
     copyMac(players[activePlayerCount].mac, playerMac);
     players[activePlayerCount].active = false;
     players[activePlayerCount].hasRoute = false;
+    players[activePlayerCount].online = false;               // Risk #4 fix: initialize online status
     players[activePlayerCount].discoveryTime = millis();
+    players[activePlayerCount].lastHeartbeat = millis();     // Risk #4 fix: initialize heartbeat
     
     char macStr[18];
     macToStr(playerMac, macStr);
@@ -104,6 +109,48 @@ int countValidRoutes() {
     }
   }
   return count;
+}
+
+// ============ RISK #4 FIX: Online Status Tracking ============
+// Update player online status based on active routes
+void updatePlayerOnlineStatus() {
+  for (int i = 0; i < activePlayerCount; i++) {
+    int routeIdx = findRoute(routeTable, players[i].mac);
+    
+    if (routeIdx >= 0) {
+      // Route exists - update heartbeat and mark online
+      players[i].lastHeartbeat = millis();
+      if (!players[i].online) {
+        char macStr[18];
+        macToStr(players[i].mac, macStr);
+        LOG("Player %d online (route found): %s", i, macStr);
+      }
+      players[i].online = true;
+    } else {
+      // Route expired - check if heartbeat timeout has passed
+      unsigned long timeSinceHeartbeat = millis() - players[i].lastHeartbeat;
+      if (timeSinceHeartbeat > PLAYER_HEARTBEAT_TIMEOUT_MS) {
+        if (players[i].online) {
+          char macStr[18];
+          macToStr(players[i].mac, macStr);
+          LOG("Player %d marked OFFLINE (no route for %lu ms): %s", i, timeSinceHeartbeat, macStr);
+        }
+        players[i].online = false;
+      }
+    }
+  }
+}
+
+// ============ RISK #2 FIX: Check if all ONLINE players have pressed ============
+// Only wait for responses from players that are online (have active routes)
+bool allReceivedFromOnlinePlayers() {
+  for (int i = 0; i < activePlayerCount; i++) {
+    // Only require press from players that are: active AND online
+    if (players[i].active && players[i].online && !playerPresses[i].received) {
+      return false;  // Still waiting for this online player
+    }
+  }
+  return true;  // All online players have pressed (or no online players active)
 }
 
 void resetPlayerPresses() {
@@ -197,6 +244,7 @@ void broadcastStart() {
   }
 
   roundActive = true;
+  roundStartTime = millis();  // Risk #2 fix: record when round started for timeout
   M5.Lcd.fillScreen(BLACK);
   M5.Lcd.setCursor(10, 20);
   M5.Lcd.setTextSize(3);
@@ -516,14 +564,8 @@ void onDataReceived(const esp_now_recv_info *recvInfo, const uint8_t *data, int 
     LOG("ACK: failed to route back to player %d", playerIdx);
   }
 
-  bool allReceived = true;
-  for (int i = 0; i < activePlayerCount; i++) {
-    if (players[i].active && !playerPresses[i].received) {
-      allReceived = false;
-      break;
-    }
-  }
-
+  bool allReceived = allReceivedFromOnlinePlayers();  // Risk #2+#4 fix: use online status
+  
   LOG("Press state: %d/%d active players received",
       countReceivedPresses(), countRoundPlayers());
 
@@ -579,6 +621,20 @@ void loop() {
     declareWinner();
     return;
   }
+
+  // ============ RISK #2 FIX: Round timeout check ============
+  // Auto-terminate round if it exceeds maximum duration
+  if (roundActive) {
+    unsigned long roundElapsed = millis() - roundStartTime;
+    if (roundElapsed > ROUND_TIMEOUT_MS) {
+      LOG("★ ROUND TIMEOUT after %lu ms - forcing completion", roundElapsed);
+      winnerPending = true;
+      return;
+    }
+  }
+
+  // ============ RISK #4 FIX: Update player online status every loop ============
+  updatePlayerOnlineStatus();
 
   // Button B: Manual broadcast to discover players
   if (M5.BtnB.wasPressed()) {

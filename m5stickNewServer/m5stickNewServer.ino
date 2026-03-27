@@ -13,7 +13,7 @@ uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 // ============ DYNAMIC PLAYER MANAGEMENT ============
 struct PlayerInfo {
   uint8_t mac[6];
-  bool active;
+  bool active;  // Selected for the current round.
   bool hasRoute;
   unsigned long discoveryTime;
 };
@@ -35,6 +35,26 @@ PlayerInfo players[MAX_PLAYERS];
 PressEvent playerPresses[MAX_PLAYERS];
 int activePlayerCount = 0;
 
+int countRoundPlayers() {
+  int count = 0;
+  for (int i = 0; i < activePlayerCount; i++) {
+    if (players[i].active) {
+      count++;
+    }
+  }
+  return count;
+}
+
+int countReceivedPresses() {
+  int count = 0;
+  for (int i = 0; i < activePlayerCount; i++) {
+    if (players[i].active && playerPresses[i].received) {
+      count++;
+    }
+  }
+  return count;
+}
+
 void registerPlayer(const uint8_t playerMac[6]) {
   // Check if already registered
   for (int i = 0; i < activePlayerCount; i++) {
@@ -46,7 +66,7 @@ void registerPlayer(const uint8_t playerMac[6]) {
   // Add new player
   if (activePlayerCount < MAX_PLAYERS) {
     copyMac(players[activePlayerCount].mac, playerMac);
-    players[activePlayerCount].active = true;
+    players[activePlayerCount].active = false;
     players[activePlayerCount].hasRoute = false;
     players[activePlayerCount].discoveryTime = millis();
     
@@ -94,6 +114,9 @@ void resetPlayerPresses() {
 
 void resetRound() {
   resetPlayerPresses();
+  for (int i = 0; i < activePlayerCount; i++) {
+    players[i].active = false;
+  }
   roundActive = false;
   winnerPending = false;
   M5.Lcd.fillScreen(BLACK);
@@ -123,7 +146,7 @@ bool sendGoToPlayer(const uint8_t destMac[6], int playerIdx) {
   
   bool success = sendViaRoute(routeTable, destMac, goPkt, label);
   if (success) {
-    LOG("GO: sent to player %d (%s) - waiting for ACK", playerIdx, macStr);
+    LOG("GO: sent to player %d (%s)", playerIdx, macStr);
   } else {
     LOG("GO: FAILED to send to player %d (%s) - route send failed", playerIdx, macStr);
   }
@@ -149,7 +172,8 @@ void broadcastStart() {
   LOG("==========================================");
   
   for (int i = 0; i < activePlayerCount; i++) {
-    if (sendGoToPlayer(players[i].mac, i)) {
+    players[i].active = sendGoToPlayer(players[i].mac, i);
+    if (players[i].active) {
       sentCount++;
     }
     // DELAY: Give ESP-NOW time to buffer/send each packet before sending next one
@@ -177,7 +201,7 @@ void broadcastStart() {
   M5.Lcd.setCursor(10, 20);
   M5.Lcd.setTextSize(3);
   M5.Lcd.println("GO!");
-  LOG("Round is live. GO sent to %d/%d players | waiting for PRESS packets",
+  LOG("Round is live. GO sent to %d/%d registered players | waiting for PRESS packets",
       sentCount, activePlayerCount);
 }
 
@@ -185,7 +209,9 @@ void sendResultToPlayers() {
   // Find fastest reaction time among players who pressed
   unsigned long fastestTime = ULONG_MAX;
   for (int i = 0; i < activePlayerCount; i++) {
-    if (playerPresses[i].received && playerPresses[i].reactionMs < fastestTime) {
+    if (players[i].active &&
+        playerPresses[i].received &&
+        playerPresses[i].reactionMs < fastestTime) {
       fastestTime = playerPresses[i].reactionMs;
     }
   }
@@ -194,13 +220,19 @@ void sendResultToPlayers() {
   int tiedCount = 0;
   int tiedPlayers[MAX_PLAYERS];
   for (int i = 0; i < activePlayerCount; i++) {
-    if (playerPresses[i].received && playerPresses[i].reactionMs == fastestTime) {
+    if (players[i].active &&
+        playerPresses[i].received &&
+        playerPresses[i].reactionMs == fastestTime) {
       tiedPlayers[tiedCount++] = i;
     }
   }
 
   // Send RESULT packet to each player with their status
   for (int i = 0; i < activePlayerCount; i++) {
+    if (!players[i].active) {
+      continue;
+    }
+
     GamePacket resultPkt;
     uint8_t resultCode;
     uint8_t tiePartnerId = 0;
@@ -248,7 +280,9 @@ void declareWinner() {
   // Find fastest reaction time
   unsigned long fastest = ULONG_MAX;
   for (int i = 0; i < activePlayerCount; i++) {
-    if (playerPresses[i].received && playerPresses[i].reactionMs < fastest) {
+    if (players[i].active &&
+        playerPresses[i].received &&
+        playerPresses[i].reactionMs < fastest) {
       fastest = playerPresses[i].reactionMs;
     }
   }
@@ -257,7 +291,9 @@ void declareWinner() {
   int winnerCount = 0;
   int winners[MAX_PLAYERS];
   for (int i = 0; i < activePlayerCount; i++) {
-    if (playerPresses[i].received && playerPresses[i].reactionMs == fastest) {
+    if (players[i].active &&
+        playerPresses[i].received &&
+        playerPresses[i].reactionMs == fastest) {
       winners[winnerCount++] = i;
     }
   }
@@ -266,7 +302,9 @@ void declareWinner() {
   for (int i = 0; i < activePlayerCount; i++) {
     char macStr[18];
     macToStr(players[i].mac, macStr);
-    if (playerPresses[i].received) {
+    if (!players[i].active) {
+      LOG("  Player %d (%s) | not active this round", i, macStr);
+    } else if (playerPresses[i].received) {
       LOG("  Player %d (%s) | reactionMs=%lu | hop=%d | diff=+%lu ms",
           i, macStr, playerPresses[i].reactionMs, playerPresses[i].hopCount,
           playerPresses[i].reactionMs - fastest);
@@ -308,7 +346,9 @@ void declareWinner() {
   
   M5.Lcd.setTextSize(1);
   for (int i = 0; i < activePlayerCount; i++) {
-    if (playerPresses[i].received) {
+    if (!players[i].active) {
+      M5.Lcd.printf("P%d: inactive\n", i);
+    } else if (playerPresses[i].received) {
       M5.Lcd.printf("P%d: %lums h:%d\n", i, playerPresses[i].reactionMs, playerPresses[i].hopCount);
     } else {
       M5.Lcd.printf("P%d: no press\n", i);
@@ -448,6 +488,11 @@ void onDataReceived(const esp_now_recv_info *recvInfo, const uint8_t *data, int 
     return;
   }
 
+  if (!players[playerIdx].active) {
+    LOG("DROP: player %d not active in this round", playerIdx);
+    return;
+  }
+
   if (playerPresses[playerIdx].received) {
     LOG("DUP PRESS from player %d | re-sending ACK", playerIdx);
 
@@ -473,13 +518,14 @@ void onDataReceived(const esp_now_recv_info *recvInfo, const uint8_t *data, int 
 
   bool allReceived = true;
   for (int i = 0; i < activePlayerCount; i++) {
-    if (!playerPresses[i].received) {
+    if (players[i].active && !playerPresses[i].received) {
       allReceived = false;
       break;
     }
   }
 
-  LOG("Press state: %d/%d players received", countValidRoutes(), activePlayerCount);
+  LOG("Press state: %d/%d active players received",
+      countReceivedPresses(), countRoundPlayers());
 
   if (allReceived) {
     winnerPending = true;
@@ -538,10 +584,10 @@ void loop() {
   if (M5.BtnB.wasPressed()) {
     LOG("Button B pressed | broadcasting discovery beacon");
     GamePacket beacon;
-    initPacket(beacon, PACKET_RREQ, myMac, broadcastMac, myMac,
+    initPacket(beacon, PACKET_AUTH_REQ, myMac, broadcastMac, myMac,
                nextPacketId(packetCounter), 0, DEFAULT_TTL);
     if (sendPacket(broadcastMac, beacon, "DISCOVERY BEACON")) {
-      LOG("Beacon sent; players should respond with routes within 3 seconds");
+      LOG("Beacon sent; players should announce themselves back to the server");
     }
     M5.Lcd.fillScreen(BLACK);
     M5.Lcd.setCursor(10, 20);

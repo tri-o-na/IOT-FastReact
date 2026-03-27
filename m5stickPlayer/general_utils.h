@@ -22,18 +22,27 @@ struct ResultState {
   uint8_t tiePartnerId;
 };
 
+inline bool hasKnownServerMac(const uint8_t *serverMac) {
+  for (int i = 0; i < 6; i++) {
+    if (serverMac[i] != 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 inline void sendRouteRequest(const uint8_t* myMac,
+                             const uint8_t* destMac,
                              const uint8_t* broadcastMac,
                              uint16_t &packetCounter,
                              const char *label) {
   GamePacket rreq;
 
-  // For RREQ during discovery, dest_mac can be broadcast
   initPacket(
     rreq,
     PACKET_RREQ,
     myMac,
-    broadcastMac,
+    destMac,
     myMac,
     nextPacketId(packetCounter),
     0,
@@ -94,6 +103,38 @@ inline void handleButtonNodeReceive(const esp_now_recv_info *recvInfo,
   macToStr(pkt.dest_mac, destStr);
   LOG("PKT type=%d origin=%s dest=%s hop=%d id=%u",
       pkt.type, originStr, destStr, pkt.hop_count, pkt.packet_id);
+
+  if (pkt.type == PACKET_AUTH_REQ) {
+    if (isLocalMac(pkt.origin_mac, myMac)) {
+      LOG("AUTH_REQ: ignore self-origin");
+      return;
+    }
+
+    bool already_seen = isSeen(seenTable, pkt.origin_mac, pkt.packet_id);
+    addRoute(routeTable, pkt.origin_mac, recvInfo->src_addr, pkt.hop_count + 1);
+    if (already_seen) {
+      LOG("AUTH_REQ: DROP duplicate (origin=%s id=%u)", originStr, pkt.packet_id);
+      return;
+    }
+    markSeen(seenTable, pkt.origin_mac, pkt.packet_id);
+    copyMac(serverMac, pkt.origin_mac);
+    LOG("AUTH_REQ: learned server route via %s hops=%d", srcStr, pkt.hop_count + 1);
+
+    sendRouteRequest(myMac, serverMac, broadcastMac, packetCounter, "DISCOVERY RREQ");
+
+    if (pkt.ttl > 1) {
+      setRelayFields(pkt, myMac);
+      delay(random(RREQ_JITTER_MIN_MS, RREQ_JITTER_MAX_MS + 1));
+      if (sendPacket(broadcastMac, pkt, "AUTH relay")) {
+        LOG("AUTH_REQ: relayed (ttl=%d hop=%d)", pkt.ttl, pkt.hop_count);
+      } else {
+        LOG("AUTH_REQ: relay send failed");
+      }
+    } else {
+      LOG("AUTH_REQ: DROP ttl exhausted");
+    }
+    return;
+  }
 
   if (pkt.type == PACKET_RREQ) {
     if (isLocalMac(pkt.origin_mac, myMac)) {
@@ -296,7 +337,8 @@ inline void handleButtonNodeLoop(const uint8_t *myMac,
   if (M5.BtnB.wasPressed()) {
     lastRouteRequestTime = millis();
     LOG("MANUAL RREQ: button pressed, restarting route discovery");
-    sendRouteRequest(myMac, broadcastMac, packetCounter, "MANUAL RREQ");
+    const uint8_t *destMac = hasKnownServerMac(serverMac) ? serverMac : broadcastMac;
+    sendRouteRequest(myMac, destMac, broadcastMac, packetCounter, "MANUAL RREQ");
     if (!gameStarted && !pendingPressValid && !awaitingAck) {
       M5.Lcd.fillScreen(BLACK);
       M5.Lcd.setCursor(10, 20);
@@ -349,7 +391,8 @@ inline void handleButtonNodeLoop(const uint8_t *myMac,
       ackDeadline = 0;
       lastRouteRequestTime = millis();
       LOG("ACK timeout | restarting route discovery for pending PRESS");
-      sendRouteRequest(myMac, broadcastMac, packetCounter, "PRESS RREQ");
+      const uint8_t *destMac = hasKnownServerMac(serverMac) ? serverMac : broadcastMac;
+      sendRouteRequest(myMac, destMac, broadcastMac, packetCounter, "PRESS RREQ");
       M5.Lcd.fillScreen(BLACK);
       M5.Lcd.setCursor(10, 30);
       M5.Lcd.setTextSize(2);
@@ -373,7 +416,8 @@ inline void handleButtonNodeLoop(const uint8_t *myMac,
 
     if (millis() - lastRouteRequestTime >= ROUTE_REDISCOVERY_MS) {
       lastRouteRequestTime = millis();
-      sendRouteRequest(myMac, broadcastMac, packetCounter, "PRESS RREQ");
+      const uint8_t *destMac = hasKnownServerMac(serverMac) ? serverMac : broadcastMac;
+      sendRouteRequest(myMac, destMac, broadcastMac, packetCounter, "PRESS RREQ");
     }
     return;
   }
@@ -405,7 +449,8 @@ inline void handleButtonNodeLoop(const uint8_t *myMac,
       lastButtonState = false;
       lastRouteRequestTime = millis();
       LOG("PRESS: route unavailable; queueing packet and restarting discovery");
-      sendRouteRequest(myMac, broadcastMac, packetCounter, "PRESS RREQ");
+      const uint8_t *destMac = hasKnownServerMac(serverMac) ? serverMac : broadcastMac;
+      sendRouteRequest(myMac, destMac, broadcastMac, packetCounter, "PRESS RREQ");
       M5.Lcd.fillScreen(BLACK);
       M5.Lcd.setCursor(10, 30);
       M5.Lcd.setTextSize(2);
@@ -429,5 +474,5 @@ inline void handleButtonNodeLoop(const uint8_t *myMac,
 inline void sendInitialRREQ(const uint8_t* myMac,
                             const uint8_t* broadcastMac,
                             uint16_t &packetCounter) {
-  sendRouteRequest(myMac, broadcastMac, packetCounter, "BOOT RREQ");
+  sendRouteRequest(myMac, broadcastMac, broadcastMac, packetCounter, "BOOT RREQ");
 }

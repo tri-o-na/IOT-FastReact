@@ -387,6 +387,13 @@ inline void handleButtonNodeLoop(const uint8_t *myMac,
     uiEvent = BUTTON_UI_NONE;
   }
 
+  // Periodic route keepalive (send even during games to prevent timeout on stuck GO screen)
+  if (millis() - lastRouteRequestTime >= ROUTE_REDISCOVERY_MS) {
+    lastRouteRequestTime = millis();
+    const uint8_t *destMac = hasKnownServerMac(serverMac) ? serverMac : broadcastMac;
+    sendRouteRequest(myMac, destMac, broadcastMac, packetCounter, "KEEPALIVE RREQ");
+  }
+
   if (!gameStarted) {
     return;
   }

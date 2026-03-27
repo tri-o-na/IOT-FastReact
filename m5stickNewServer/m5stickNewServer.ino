@@ -9,6 +9,8 @@ uint8_t myMac[6];
 uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 #define MAX_PLAYERS 10
+#define PLAYER_REMOVE_TIMEOUT_MS 10000
+#define PLAYER_IDLE_ACTIVITY_TIMEOUT_MS 120000
 
 // ============ DYNAMIC PLAYER MANAGEMENT ============
 struct PlayerInfo {
@@ -18,6 +20,7 @@ struct PlayerInfo {
   bool online;                    // Risk #4 fix: track if player is online
   unsigned long discoveryTime;
   unsigned long lastHeartbeat;    // Risk #4 fix: track last route refresh
+  unsigned long lastGameActivityTime; // Track last PRESS or game participation (for idle timeout)
 };
 
 struct PressEvent {
@@ -37,6 +40,15 @@ unsigned long roundStartTime = 0;  // Risk #2 fix: track round start for timeout
 PlayerInfo players[MAX_PLAYERS];
 PressEvent playerPresses[MAX_PLAYERS];
 int activePlayerCount = 0;
+
+void drawIdleStatus() {
+  M5.Lcd.fillScreen(BLACK);
+  M5.Lcd.setCursor(10, 20);
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.printf("Players: %d\n", activePlayerCount);
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.println("A: start  B: discover");
+}
 
 int countRoundPlayers() {
   int count = 0;
@@ -74,10 +86,11 @@ void registerPlayer(const uint8_t playerMac[6]) {
     players[activePlayerCount].online = false;               // Risk #4 fix: initialize online status
     players[activePlayerCount].discoveryTime = millis();
     players[activePlayerCount].lastHeartbeat = millis();     // Risk #4 fix: initialize heartbeat
+    players[activePlayerCount].lastGameActivityTime = millis();  // Initialize idle timer at registration
     
     char macStr[18];
     macToStr(playerMac, macStr);
-    LOG("New player registered: %s (%d total)", macStr, activePlayerCount + 1);
+    LOG("New player registered: %s (%d total) | idle timer started", macStr, activePlayerCount + 1);
     activePlayerCount++;
   } else {
     LOG("Cannot register more players (MAX_PLAYERS=%d reached)", MAX_PLAYERS);
@@ -114,12 +127,16 @@ int countValidRoutes() {
 // ============ RISK #4 FIX: Online Status Tracking ============
 // Update player online status based on active routes
 void updatePlayerOnlineStatus() {
+  // Keep route table fresh before checking per-player route validity.
+  expireRoutes(routeTable);
+  unsigned long now = millis();
+
   for (int i = 0; i < activePlayerCount; i++) {
     int routeIdx = findRoute(routeTable, players[i].mac);
     
     if (routeIdx >= 0) {
       // Route exists - update heartbeat and mark online
-      players[i].lastHeartbeat = millis();
+      players[i].lastHeartbeat = now;
       if (!players[i].online) {
         char macStr[18];
         macToStr(players[i].mac, macStr);
@@ -128,7 +145,7 @@ void updatePlayerOnlineStatus() {
       players[i].online = true;
     } else {
       // Route expired - check if heartbeat timeout has passed
-      unsigned long timeSinceHeartbeat = millis() - players[i].lastHeartbeat;
+      unsigned long timeSinceHeartbeat = now - players[i].lastHeartbeat;
       if (timeSinceHeartbeat > PLAYER_HEARTBEAT_TIMEOUT_MS) {
         if (players[i].online) {
           char macStr[18];
@@ -166,13 +183,60 @@ void resetRound() {
   }
   roundActive = false;
   winnerPending = false;
-  M5.Lcd.fillScreen(BLACK);
-  M5.Lcd.setCursor(10, 20);
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.printf("Players: %d\n", activePlayerCount);
-  M5.Lcd.setTextSize(1);
-  M5.Lcd.println("Press A to START!");
+  drawIdleStatus();
   LOG("--- Round reset. %d players registered ---", activePlayerCount);
+}
+
+void removePlayerAt(int idx) {
+  for (int i = idx; i < activePlayerCount - 1; i++) {
+    players[i] = players[i + 1];
+    playerPresses[i] = playerPresses[i + 1];
+  }
+
+  if (activePlayerCount > 0) {
+    players[activePlayerCount - 1].active = false;
+    players[activePlayerCount - 1].hasRoute = false;
+    players[activePlayerCount - 1].online = false;
+    playerPresses[activePlayerCount - 1] = {0, 0, false};
+    activePlayerCount--;
+  }
+}
+
+int removeDisconnectedPlayers() {
+  int removedCount = 0;
+  unsigned long now = millis();
+
+  for (int i = 0; i < activePlayerCount; ) {
+    // Remove if offline (route expired)
+    if (!players[i].online) {
+      unsigned long offlineFor = now - players[i].lastHeartbeat;
+      if (offlineFor > PLAYER_REMOVE_TIMEOUT_MS) {
+        char macStr[18];
+        macToStr(players[i].mac, macStr);
+        LOG("Removing disconnected player idx=%d mac=%s offline=%lu ms",
+            i, macStr, offlineFor);
+        removePlayerAt(i);
+        removedCount++;
+        continue;
+      }
+    }
+    // Also remove if idle (no game activity for 2 minutes)
+    else {
+      unsigned long idleFor = now - players[i].lastGameActivityTime;
+      if (idleFor > PLAYER_IDLE_ACTIVITY_TIMEOUT_MS) {
+        char macStr[18];
+        macToStr(players[i].mac, macStr);
+        LOG("Removing idle player idx=%d mac=%s no_game_activity=%lu ms",
+            i, macStr, idleFor);
+        removePlayerAt(i);
+        removedCount++;
+        continue;
+      }
+    }
+    i++;
+  }
+
+  return removedCount;
 }
 
 bool sendGoToPlayer(const uint8_t destMac[6], int playerIdx) {
@@ -446,6 +510,10 @@ void onDataReceived(const esp_now_recv_info *recvInfo, const uint8_t *data, int 
 
     // Auto-register player if not already registered
     registerPlayer(pkt.origin_mac);
+    int regIdx = findPlayerIndex(pkt.origin_mac);
+    if (regIdx >= 0) {
+      // Keepalive RREQ does NOT count as game activity, only keeps route alive
+    }
     
     bool already_seen = isSeen(seenTable, pkt.origin_mac, pkt.packet_id);
     addRoute(routeTable, pkt.origin_mac, recvInfo->src_addr, pkt.hop_count + 1);
@@ -535,6 +603,9 @@ void onDataReceived(const esp_now_recv_info *recvInfo, const uint8_t *data, int 
     LOG("DROP: unknown player MAC %s", originStr);
     return;
   }
+
+  // Update game activity timestamp (PRESS indicates actual participation)
+  players[playerIdx].lastGameActivityTime = millis();
 
   if (!players[playerIdx].active) {
     LOG("DROP: player %d not active in this round", playerIdx);
@@ -641,6 +712,16 @@ void loop() {
 
   // ============ RISK #4 FIX: Update player online status every loop ============
   updatePlayerOnlineStatus();
+
+  // Remove stale disconnected players only while idle to keep round indices stable.
+  if (!roundActive) {
+    int removed = removeDisconnectedPlayers();
+    if (removed > 0) {
+      LOG("Removed %d disconnected player(s). Active slots now: %d/%d",
+          removed, activePlayerCount, MAX_PLAYERS);
+      drawIdleStatus();
+    }
+  }
 
   // Button B: Manual broadcast to discover players
   if (M5.BtnB.wasPressed()) {

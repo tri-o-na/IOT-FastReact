@@ -97,6 +97,12 @@ inline void handleButtonNodeReceive(const esp_now_recv_info *recvInfo,
     return;
   }
 
+  // Register sender as peer so we can receive encrypted unicast from them later.
+  // ESP-NOW encrypted unicast requires mutual peer registration; without this the
+  // GO packet (sent as encrypted unicast by the server) is silently dropped before
+  // the receive callback fires, leaving the player stuck at "Waiting for GO...".
+  registerPeerIfNeeded(recvInfo->src_addr);
+
   char originStr[18];
   macToStr(pkt.origin_mac, originStr);
   char destStr[18];

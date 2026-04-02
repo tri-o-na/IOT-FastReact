@@ -7,7 +7,7 @@
 
 uint8_t myMac[6];
 uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-
+const uint8_t faultyPlayerMac[6] = {0x4C, 0x75, 0x25, 0xCB, 0x85, 0x90};
 #define MAX_PLAYERS 10
 #define PLAYER_REMOVE_TIMEOUT_MS 10000
 #define PLAYER_IDLE_ACTIVITY_TIMEOUT_MS 120000
@@ -42,6 +42,57 @@ unsigned long roundStartTime = 0; // Risk #2 fix: track round start for timeout
 PlayerInfo players[MAX_PLAYERS];
 PressEvent playerPresses[MAX_PLAYERS];
 int activePlayerCount = 0;
+
+bool hasConfiguredMac(const uint8_t mac[6])
+{
+  for (int i = 0; i < 6; ++i)
+  {
+    if (mac[i] != 0x00)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool isBroadcastMac(const uint8_t mac[6])
+{
+  for (int i = 0; i < 6; ++i)
+  {
+    if (mac[i] != 0xFF)
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool shouldBlockDirectPeer(const uint8_t mac[6])
+{
+  if (isBroadcastMac(mac))
+  {
+    return false;
+  }
+  if (!hasConfiguredMac(faultyPlayerMac))
+  {
+    return false;
+  }
+
+  return macEquals(mac, faultyPlayerMac);
+}
+
+void logBlockedNeighbor()
+{
+  char macStr[18];
+  macToStr(faultyPlayerMac, macStr);
+  if (!hasConfiguredMac(faultyPlayerMac))
+  {
+    LOG("Demo topology: faulty player MAC not configured yet");
+    return;
+  }
+
+  LOG("Demo topology: server blocks direct faulty-player link to %s", macStr);
+}
 
 void drawIdleStatus()
 {
@@ -587,6 +638,12 @@ void onDataReceived(const esp_now_recv_info *recvInfo, const uint8_t *data, int 
   macToStr(recvInfo->src_addr, srcStr);
   LOG("RECV from %s | len=%d | roundActive=%d", srcStr, len, roundActive);
 
+  if (shouldBlockDirectPeer(recvInfo->src_addr))
+  {
+    LOG("DROP: source %s is blocked for NewServer", srcStr);
+    return;
+  }
+
   if (len != sizeof(GamePacket))
   {
     LOG("DROP: wrong len (got %d, want %d)", len, (int)sizeof(GamePacket));
@@ -759,6 +816,10 @@ void onDataReceived(const esp_now_recv_info *recvInfo, const uint8_t *data, int 
     return;
   }
 
+  // Refresh the player route from the hop that actually delivered PRESS so
+  // the ACK follows the current multi-hop path even if the topology changed.
+  addRoute(routeTable, pkt.origin_mac, recvInfo->src_addr, pkt.hop_count + 1);
+
   // Update game activity timestamp (PRESS indicates actual participation)
   players[playerIdx].lastGameActivityTime = millis();
 
@@ -856,6 +917,7 @@ void setup()
   registerPeer(broadcastMac);
   resetSeenTable(seenTable);
   resetRouteTable(routeTable);
+  logBlockedNeighbor();
 
   LOG("Server ready - waiting for player discovery (up to %d players)", MAX_PLAYERS);
   resetRound();

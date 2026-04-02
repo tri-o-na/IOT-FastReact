@@ -6,6 +6,7 @@
 #define RREQ_JITTER_MIN_MS 20
 #define RREQ_JITTER_MAX_MS 80
 #define ROUTE_REDISCOVERY_MS 3000
+#define JOIN_INTENT_REFRESH_MS 15000
 #define PRESS_ACK_TIMEOUT_MS 5000
 
 enum ButtonUiEvent : uint8_t {
@@ -128,13 +129,13 @@ inline void handleButtonNodeReceive(const esp_now_recv_info *recvInfo,
       return;
     }
 
-    bool already_seen = isSeen(seenTable, pkt.origin_mac, pkt.packet_id);
+    bool already_seen = isSeen(seenTable, pkt.origin_mac, pkt.type, pkt.packet_id);
     addRoute(routeTable, pkt.origin_mac, recvInfo->src_addr, pkt.hop_count + 1);
     if (already_seen) {
       LOG("AUTH_REQ: DROP duplicate (origin=%s id=%u)", originStr, pkt.packet_id);
       return;
     }
-    markSeen(seenTable, pkt.origin_mac, pkt.packet_id);
+    markSeen(seenTable, pkt.origin_mac, pkt.type, pkt.packet_id);
     copyMac(serverMac, pkt.origin_mac);
     LOG("AUTH_REQ: learned server route via %s hops=%d", srcStr, pkt.hop_count + 1);
 
@@ -160,13 +161,13 @@ inline void handleButtonNodeReceive(const esp_now_recv_info *recvInfo,
       LOG("AUTH_RESP: ignore self-origin");
       return;
     }
-    bool already_seen = isSeen(seenTable, pkt.origin_mac, pkt.packet_id);
+    bool already_seen = isSeen(seenTable, pkt.origin_mac, pkt.type, pkt.packet_id);
     addRoute(routeTable, pkt.origin_mac, recvInfo->src_addr, pkt.hop_count + 1);
     if (already_seen) {
       LOG("AUTH_RESP: DROP duplicate (origin=%s id=%u)", originStr, pkt.packet_id);
       return;
     }
-    markSeen(seenTable, pkt.origin_mac, pkt.packet_id);
+    markSeen(seenTable, pkt.origin_mac, pkt.type, pkt.packet_id);
     if (pkt.ttl > 1) {
       setRelayFields(pkt, myMac);
       delay(random(RREQ_JITTER_MIN_MS, RREQ_JITTER_MAX_MS + 1));
@@ -184,13 +185,13 @@ inline void handleButtonNodeReceive(const esp_now_recv_info *recvInfo,
       return;
     }
 
-    bool already_seen = isSeen(seenTable, pkt.origin_mac, pkt.packet_id);
+    bool already_seen = isSeen(seenTable, pkt.origin_mac, pkt.type, pkt.packet_id);
     addRoute(routeTable, pkt.origin_mac, recvInfo->src_addr, pkt.hop_count + 1);
     if (already_seen) {
       LOG("DROP: duplicate (origin=%s id=%u)", originStr, pkt.packet_id);
       return;
     }
-    markSeen(seenTable, pkt.origin_mac, pkt.packet_id);
+    markSeen(seenTable, pkt.origin_mac, pkt.type, pkt.packet_id);
 
     LOG("RREQ: reverse route origin=%s via=%s hops=%d", originStr, srcStr, pkt.hop_count + 1);
 
@@ -220,7 +221,7 @@ inline void handleButtonNodeReceive(const esp_now_recv_info *recvInfo,
 
   else if (pkt.type == PACKET_RREP) {
 
-    bool already_seen = isSeen(seenTable, pkt.origin_mac, pkt.packet_id);
+    bool already_seen = isSeen(seenTable, pkt.origin_mac, pkt.type, pkt.packet_id);
     if (already_seen) {
       LOG("DROP: duplicate (origin=%s id=%u)", originStr, pkt.packet_id);
       return;
@@ -233,7 +234,7 @@ inline void handleButtonNodeReceive(const esp_now_recv_info *recvInfo,
         return;
     }
     addRoute(routeTable, pkt.origin_mac, recvInfo->src_addr, pkt.hop_count + 1);
-    markSeen(seenTable,pkt.origin_mac,pkt.packet_id);
+    markSeen(seenTable,pkt.origin_mac,pkt.type,pkt.packet_id);
 
     LOG("RREP: learned route to %s via %s hops=%d",
         originStr, srcStr, pkt.hop_count + 1);
@@ -259,7 +260,7 @@ inline void handleButtonNodeReceive(const esp_now_recv_info *recvInfo,
   }
 
   if (pkt.type == PACKET_GO) {
-    if (seenCheck(seenTable, pkt.origin_mac, pkt.packet_id)) {
+    if (seenCheck(seenTable, pkt.origin_mac, pkt.type, pkt.packet_id)) {
       LOG("GO: DROP duplicate (origin=%s id=%u)", originStr, pkt.packet_id);
       return;
     }
@@ -290,7 +291,7 @@ inline void handleButtonNodeReceive(const esp_now_recv_info *recvInfo,
   }
 
   if (pkt.type == PACKET_PRESS && !isLocalMac(pkt.dest_mac, myMac)) {
-    if (seenCheck(seenTable, pkt.origin_mac, pkt.packet_id)) {
+    if (seenCheck(seenTable, pkt.origin_mac, pkt.type, pkt.packet_id)) {
       LOG("PRESS: DROP duplicate (origin=%s id=%u)", originStr, pkt.packet_id);
       return;
     }
@@ -300,7 +301,7 @@ inline void handleButtonNodeReceive(const esp_now_recv_info *recvInfo,
   }
 
   if (pkt.type == PACKET_ACK && !isLocalMac(pkt.dest_mac, myMac)) {
-    if (seenCheck(seenTable, pkt.origin_mac, pkt.packet_id)) {
+    if (seenCheck(seenTable, pkt.origin_mac, pkt.type, pkt.packet_id)) {
       LOG("ACK: DROP duplicate (origin=%s id=%u)", originStr, pkt.packet_id);
       return;
     }
@@ -310,7 +311,7 @@ inline void handleButtonNodeReceive(const esp_now_recv_info *recvInfo,
   }
 
   if (pkt.type == PACKET_RESULT && !isLocalMac(pkt.dest_mac, myMac)) {
-    if (seenCheck(seenTable, pkt.origin_mac, pkt.packet_id)) {
+    if (seenCheck(seenTable, pkt.origin_mac, pkt.type, pkt.packet_id)) {
       LOG("RESULT: DROP duplicate (origin=%s id=%u)", originStr, pkt.packet_id);
       return;
     }
@@ -379,6 +380,7 @@ inline void handleButtonNodeLoop(const uint8_t *myMac,
                                  bool &lastButtonState,
                                  unsigned long &lastDebounceTime,
                                  unsigned long &lastRouteRequestTime,
+                                 unsigned long &lastJoinIntentTime,
                                  unsigned long debounceDelay,
                                  unsigned long startTime,
                                  uint8_t *serverMac,
@@ -386,6 +388,7 @@ inline void handleButtonNodeLoop(const uint8_t *myMac,
   M5.update();
   if (M5.BtnB.wasPressed()) {
     lastRouteRequestTime = millis();
+    lastJoinIntentTime = millis();
     LOG("MANUAL RREQ: button pressed, restarting route discovery");
     const uint8_t *destMac = hasKnownServerMac(serverMac) ? serverMac : broadcastMac;
     sendRouteRequest(myMac, destMac, broadcastMac, packetCounter, "MANUAL RREQ");
@@ -443,6 +446,10 @@ inline void handleButtonNodeLoop(const uint8_t *myMac,
     lastRouteRequestTime = millis();
     const uint8_t *destMac = hasKnownServerMac(serverMac) ? serverMac : broadcastMac;
     sendRouteRequest(myMac, destMac, broadcastMac, packetCounter, "KEEPALIVE RREQ");
+    if (millis() - lastJoinIntentTime >= JOIN_INTENT_REFRESH_MS) {
+      lastJoinIntentTime = millis();
+      sendJoinIntent(myMac, broadcastMac, packetCounter);
+    }
   }
 
   if (!gameStarted) {

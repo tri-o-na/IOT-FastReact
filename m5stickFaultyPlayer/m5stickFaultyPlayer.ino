@@ -9,6 +9,10 @@ uint8_t myMac[6];
 uint8_t serverMac[6] = {0}; // Will be discovered via GO packet
 uint8_t broadcastMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
+// Demo topology: block the direct server <-> faulty-player link.
+// Fill this with the real m5stickNewServer MAC before flashing for the demo.
+const uint8_t blockedServerMac[6] = {0xE8, 0x9F, 0x6D, 0x09, 0x03, 0xA4};
+
 bool lastButtonState = false;
 unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 50;
@@ -26,8 +30,67 @@ SeenEntry seenTable[MAX_SEEN_ENTRIES];
 RouteEntry routeTable[MAX_ROUTE_ENTRIES];
 ResultState resultState = {0, 0, 0};
 
+bool hasConfiguredMac(const uint8_t mac[6])
+{
+  for (int i = 0; i < 6; ++i)
+  {
+    if (mac[i] != 0x00)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool isBroadcastMac(const uint8_t mac[6])
+{
+  for (int i = 0; i < 6; ++i)
+  {
+    if (mac[i] != 0xFF)
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool shouldBlockDirectPeer(const uint8_t mac[6])
+{
+  if (isBroadcastMac(mac))
+  {
+    return false;
+  }
+  if (!hasConfiguredMac(blockedServerMac))
+  {
+    return false;
+  }
+
+  return macEquals(mac, blockedServerMac);
+}
+
+void logBlockedNeighbor()
+{
+  char macStr[18];
+  macToStr(blockedServerMac, macStr);
+  if (!hasConfiguredMac(blockedServerMac))
+  {
+    LOG("Demo topology: blocked server MAC not configured yet");
+    return;
+  }
+
+  LOG("Demo topology: FaultyPlayer blocks direct server link to %s", macStr);
+}
+
 void onDataReceived(const esp_now_recv_info *recvInfo, const uint8_t *data, int len)
 {
+  char srcStr[18];
+  macToStr(recvInfo->src_addr, srcStr);
+  if (shouldBlockDirectPeer(recvInfo->src_addr))
+  {
+    LOG("DROP: source %s is blocked for FaultyPlayer", srcStr);
+    return;
+  }
+
   handleButtonNodeReceive(recvInfo, data, len, myMac, broadcastMac, packetCounter,
                           seenTable, routeTable, gameStarted, pendingPressValid,
                           awaitingAck, ackDeadline, uiEvent, deliveredReactionMs,
@@ -86,6 +149,7 @@ void setup()
   registerPeer(broadcastMac);
   resetSeenTable(seenTable);
   resetRouteTable(routeTable);
+  logBlockedNeighbor();
 
   delay(100);
   // Send initial route request to discover server

@@ -26,6 +26,7 @@ unsigned long deliveredReactionMs = 0;
 GamePacket pendingPress = {};
 unsigned long lastRouteRequestTime = 0;
 unsigned long lastJoinIntentTime = 0;
+unsigned long lastUserInputTime = 0;
 uint16_t packetCounter = 0;
 SeenEntry seenTable[MAX_SEEN_ENTRIES];
 RouteEntry routeTable[MAX_ROUTE_ENTRIES];
@@ -103,6 +104,7 @@ void setup()
   M5.begin();
   Serial.begin(115200);
   delay(1000);
+  esp_sleep_wakeup_cause_t wakeCause = esp_sleep_get_wakeup_cause();
   randomSeed(esp_random());
   WiFi.mode(WIFI_STA);
   esp_wifi_get_mac(WIFI_IF_STA, myMac);
@@ -110,6 +112,18 @@ void setup()
   char actualStr[18];
   macToStr(myMac, actualStr);
   LOG("Player Node | actual MAC: %s", actualStr);
+  if (wakeCause == ESP_SLEEP_WAKEUP_EXT0)
+  {
+    LOG("Wake cause: EXT0 (BtnB)");
+  }
+  else if (wakeCause == ESP_SLEEP_WAKEUP_UNDEFINED)
+  {
+    LOG("Wake cause: cold boot");
+  }
+  else
+  {
+    LOG("Wake cause: %d", (int)wakeCause);
+  }
 
   if (!configureEspNowChannel())
   {
@@ -158,6 +172,7 @@ void setup()
 
   M5.Lcd.setTextSize(2);
   M5.Lcd.println("Player Node\nWaiting\nfor GO...");
+  lastUserInputTime = millis();
   LOG("Player setup complete");
 }
 
@@ -166,5 +181,6 @@ void loop()
   handleButtonNodeLoop(myMac, broadcastMac, packetCounter, routeTable,
                        gameStarted, pendingPressValid, awaitingAck, ackDeadline,
                        uiEvent, deliveredReactionMs, pendingPress, lastButtonState, lastDebounceTime,
-                       lastRouteRequestTime, lastJoinIntentTime, debounceDelay, startTime, serverMac, resultState);
+                       lastRouteRequestTime, lastJoinIntentTime, lastUserInputTime,
+                       debounceDelay, startTime, serverMac, resultState);
 }

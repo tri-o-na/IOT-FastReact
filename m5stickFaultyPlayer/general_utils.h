@@ -1,5 +1,7 @@
 #pragma once
 
+#include <esp_sleep.h>
+
 #include "espnow_utils.h"
 #include "auth_utils.h"
 
@@ -8,6 +10,12 @@
 #define ROUTE_REDISCOVERY_MS 3000
 #define JOIN_INTENT_REFRESH_MS 15000
 #define PRESS_ACK_TIMEOUT_MS 5000
+constexpr unsigned long PLAYER_DEEP_SLEEP_IDLE_MS = 30000UL;
+constexpr gpio_num_t BTN_B_WAKE_GPIO = GPIO_NUM_39;
+constexpr int BTN_B_WAKE_LEVEL = 0;
+constexpr uint8_t SCREEN_BRIGHTNESS_DIM_START = 12;
+constexpr uint8_t SCREEN_BRIGHTNESS_SLEEP = 2;
+constexpr unsigned long SCREEN_DIM_STEP_DELAY_MS = 40;
 
 enum ButtonUiEvent : uint8_t {
   BUTTON_UI_NONE = 0,
@@ -31,6 +39,32 @@ inline bool hasKnownServerMac(const uint8_t *serverMac) {
     }
   }
   return false;
+}
+
+inline void enterDeepSleepOnBtnB() {
+  LOG("Idle timeout reached | entering deep sleep (wake: BtnB GPIO39 low)");
+  M5.Lcd.fillScreen(BLACK);
+  M5.Lcd.setCursor(10, 20);
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.println("Sleeping...");
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.println("Press BtnB");
+  M5.Lcd.println("to wake");
+
+  esp_err_t wakeErr = esp_sleep_enable_ext0_wakeup(BTN_B_WAKE_GPIO, BTN_B_WAKE_LEVEL);
+  if (wakeErr != ESP_OK) {
+    LOG("ERROR: ext0 wake setup failed (err=%d)", wakeErr);
+    return;
+  }
+
+  for (int level = SCREEN_BRIGHTNESS_DIM_START; level >= SCREEN_BRIGHTNESS_SLEEP; --level) {
+    M5.Axp.ScreenBreath(level);
+    delay(SCREEN_DIM_STEP_DELAY_MS);
+  }
+
+  Serial.flush();
+  delay(20);
+  esp_deep_sleep_start();
 }
 
 inline void sendRouteRequest(const uint8_t* myMac,
@@ -381,14 +415,22 @@ inline void handleButtonNodeLoop(const uint8_t *myMac,
                                  unsigned long &lastDebounceTime,
                                  unsigned long &lastRouteRequestTime,
                                  unsigned long &lastJoinIntentTime,
+                                 unsigned long &lastUserInputTime,
                                  unsigned long debounceDelay,
                                  unsigned long startTime,
                                  uint8_t *serverMac,
                                  const ResultState &resultState) {
   M5.update();
+  unsigned long now = millis();
+
+  if (M5.BtnA.wasPressed()) {
+    lastUserInputTime = now;
+  }
+
   if (M5.BtnB.wasPressed()) {
-    lastRouteRequestTime = millis();
-    lastJoinIntentTime = millis();
+    lastUserInputTime = now;
+    lastRouteRequestTime = now;
+    lastJoinIntentTime = now;
     LOG("MANUAL RREQ: button pressed, restarting route discovery");
     const uint8_t *destMac = hasKnownServerMac(serverMac) ? serverMac : broadcastMac;
     sendRouteRequest(myMac, destMac, broadcastMac, packetCounter, "MANUAL RREQ");
@@ -441,13 +483,20 @@ inline void handleButtonNodeLoop(const uint8_t *myMac,
     uiEvent = BUTTON_UI_NONE;
   }
 
+  // Enter deep sleep only when idle and not in any in-flight press/ack workflow.
+  if (!gameStarted && !pendingPressValid && !awaitingAck &&
+      (now - lastUserInputTime >= PLAYER_DEEP_SLEEP_IDLE_MS)) {
+    enterDeepSleepOnBtnB();
+    return;
+  }
+
   // Periodic route keepalive (send even during games to prevent timeout on stuck GO screen)
-  if (millis() - lastRouteRequestTime >= ROUTE_REDISCOVERY_MS) {
-    lastRouteRequestTime = millis();
+  if (now - lastRouteRequestTime >= ROUTE_REDISCOVERY_MS) {
+    lastRouteRequestTime = now;
     const uint8_t *destMac = hasKnownServerMac(serverMac) ? serverMac : broadcastMac;
     sendRouteRequest(myMac, destMac, broadcastMac, packetCounter, "KEEPALIVE RREQ");
-    if (millis() - lastJoinIntentTime >= JOIN_INTENT_REFRESH_MS) {
-      lastJoinIntentTime = millis();
+    if (now - lastJoinIntentTime >= JOIN_INTENT_REFRESH_MS) {
+      lastJoinIntentTime = now;
       sendJoinIntent(myMac, broadcastMac, packetCounter);
     }
   }
@@ -496,6 +545,7 @@ inline void handleButtonNodeLoop(const uint8_t *myMac,
   bool currentPress = M5.BtnA.isPressed();
   if (currentPress && !lastButtonState &&
       (millis() - lastDebounceTime > debounceDelay)) {
+    lastUserInputTime = millis();
     lastDebounceTime = millis();
 
     GamePacket pkt;
